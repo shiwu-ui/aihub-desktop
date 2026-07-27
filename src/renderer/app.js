@@ -11,6 +11,8 @@ const state = {
   user: null,
   settings: null,
   keys: [],
+  keyList: { page: 1, pageSize: 20, search: '', groupId: '', status: '', columns: { concurrency: true, todayUsage: true, monthUsage: true, expiresAt: true } },
+  clientSelectedKeyId: null,
   groups: [],
   usagePeriod: 'month',
   dashboardChart: null,
@@ -437,35 +439,48 @@ async function renderDashboard() {
   renderDashboardChart(chartPoints)
 }
 
+function keyListQuery() {
+  const list = state.keyList
+  const query = new URLSearchParams({ page: String(list.page), page_size: String(list.pageSize), sort_by: 'created_at', sort_order: 'desc' })
+  if (list.search) query.set('search', list.search)
+  if (list.groupId) query.set('group_id', list.groupId)
+  if (list.status) query.set('status', list.status)
+  return query.toString()
+}
+
+function keyListPagination(total, pages) {
+  const page = state.keyList.page
+  return `<div class="pagination-bar"><span>共 ${number(total)} 条 · 每页 ${number(state.keyList.pageSize)} 条</span><div class="pagination-controls"><button class="icon-button" data-action="keys-prev" title="上一页" aria-label="上一页" ${page <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button><strong>${page} / ${Math.max(1, pages)}</strong><button class="icon-button" data-action="keys-next" title="下一页" aria-label="下一页" ${page >= Math.max(1, pages) ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button></div></div>`
+}
+
 async function renderKeys() {
   const [keysData, groupsData] = await Promise.all([
-    request('/keys?page=1&page_size=50&sort_by=created_at&sort_order=desc'),
+    request(`/keys?${keyListQuery()}`),
     request('/groups/available'),
   ])
   const keys = paginated(keysData)
   state.keys = keys.items
   state.groups = Array.isArray(groupsData) ? groupsData : groupsData?.groups || groupsData?.items || []
+  const visible = state.keyList.columns
+  const optionalHeaders = [
+    ['concurrency', '并发'], ['todayUsage', '今日用量'], ['monthUsage', '30 天用量'], ['expiresAt', '到期时间'],
+  ].filter(([name]) => visible[name]).map(([, label]) => `<th>${label}</th>`).join('')
   const rows = keys.items.map((key) => {
-    const quotaPercent = key.quota > 0 ? Math.min(100, (Number(key.quota_used || 0) / Number(key.quota)) * 100) : 0
-    return `<tr>
-      <td style="width:28%"><div class="cell-title"><strong>${escapeHTML(key.name || '未命名 Key')}</strong><span>${escapeHTML(key.key ? `${key.key.slice(0, 8)}••••${key.key.slice(-4)}` : `ID ${key.id}`)}</span></div></td>
-      <td style="width:13%"><span class="status-badge ${escapeHTML(key.status)}">${escapeHTML(key.status)}</span></td>
-      <td style="width:17%"><div class="cell-title"><strong>${escapeHTML(key.group?.name || '默认分组')}</strong><span>${number(key.group?.rate_multiplier ?? key.group?.user_rate ?? 1, 2)}x</span></div></td>
-      <td style="width:18%"><div class="cell-title"><strong>${key.quota > 0 ? `${money(key.quota_used)} / ${money(key.quota)}` : '不限额'}</strong>${key.quota > 0 ? `<span class="progress-track"><span class="progress-fill" style="width:${quotaPercent}%"></span></span>` : '<span>按余额扣费</span>'}</div></td>
-      <td style="width:16%"><div class="cell-title"><strong>${Number(key.max_rate_multiplier || 0) > 0 ? `最高 ${number(key.max_rate_multiplier, 2)}x` : '倍率不限'}</strong><span>${key.failover_enabled ? (key.failover_strategy === 'lowest_rate' ? '最低倍率故障转移' : `自选 ${number(key.failover_group_ids?.length)} 个备用组`) : '未启用故障转移'}</span></div></td>
-      <td style="width:11%">${escapeHTML(dateTime(key.last_used_at))}</td>
-      <td style="width:10%"><div class="row-actions">
-        ${key.key ? `<button class="icon-button" data-action="copy-key" data-id="${key.id}" title="复制 Key"><i data-lucide="copy"></i></button>` : ''}
-        <button class="icon-button" data-action="edit-key" data-id="${key.id}" title="编辑策略"><i data-lucide="settings-2"></i></button>
-        <button class="icon-button" data-action="toggle-key" data-id="${key.id}" title="${key.status === 'active' ? '停用' : '启用'}"><i data-lucide="${key.status === 'active' ? 'pause' : 'play'}"></i></button>
-        <button class="icon-button" data-action="delete-key" data-id="${key.id}" title="删除"><i data-lucide="trash-2"></i></button>
-      </div></td>
-    </tr>`
+    const optionalCells = [
+      visible.concurrency ? `<td>${number(key.current_concurrency ?? key.concurrency)}</td>` : '',
+      visible.todayUsage ? `<td>${money(key.today_usage ?? key.today_actual_cost)}</td>` : '',
+      visible.monthUsage ? `<td>${money(key.usage_30d ?? key.month_usage ?? key.actual_cost_30d)}</td>` : '',
+      visible.expiresAt ? `<td>${escapeHTML(dateTime(key.expires_at))}</td>` : '',
+    ].join('')
+    return `<tr><td><div class="cell-title"><strong>${escapeHTML(key.name || '未命名 Key')}</strong><span>${escapeHTML(key.key ? `${key.key.slice(0, 8)}...${key.key.slice(-4)}` : `ID ${key.id}`)}</span></div></td><td><span class="status-badge ${escapeHTML(key.status)}">${escapeHTML(key.status)}</span></td><td>${escapeHTML(key.group?.name || '默认分组')}</td><td>${key.quota > 0 ? `${money(key.quota_used)} / ${money(key.quota)}` : '不限额'}</td>${optionalCells}<td>${escapeHTML(dateTime(key.last_used_at))}</td><td><div class="row-actions">${key.key ? `<button class="icon-button" data-action="copy-key" data-id="${key.id}" title="复制 Key" aria-label="复制 Key"><i data-lucide="copy"></i></button>` : ''}<button class="icon-button" data-action="configure-client-key" data-id="${key.id}" title="配置客户端" aria-label="配置客户端"><i data-lucide="monitor-cog"></i></button><button class="icon-button" data-action="edit-key" data-id="${key.id}" title="编辑策略" aria-label="编辑策略"><i data-lucide="settings-2"></i></button><button class="icon-button" data-action="toggle-key" data-id="${key.id}" title="${key.status === 'active' ? '停用' : '启用'}" aria-label="切换状态"><i data-lucide="${key.status === 'active' ? 'pause' : 'play'}"></i></button><button class="icon-button" data-action="delete-key" data-id="${key.id}" title="删除 Key" aria-label="删除 Key"><i data-lucide="trash-2"></i></button></div></td></tr>`
   }).join('')
-  $('#content').innerHTML = `<div class="page-stack">
-    <div class="page-toolbar"><div class="toolbar-copy"><h2>你的访问凭据</h2><p>用于模型调用，不是账户管理密钥。</p></div><button class="primary-button" data-action="create-key"><i data-lucide="plus"></i>新建 Key</button></div>
-    <section class="panel">${rows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>名称</th><th>状态</th><th>分组</th><th>额度</th><th>调用策略</th><th>最后使用</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : empty('key-round', '还没有 API Key', '创建一个 Key 后即可连接 Claude、OpenAI 或 Gemini 客户端。', '<button class="primary-button" data-action="create-key"><i data-lucide="plus"></i>新建 Key</button>')}</section>
-  </div>`
+  const groupOptions = state.groups.map((group) => `<option value="${escapeHTML(group.id)}" ${String(state.keyList.groupId) === String(group.id) ? 'selected' : ''}>${escapeHTML(group.name)}</option>`).join('')
+  const columnToggles = [['concurrency', '并发'], ['todayUsage', '今日用量'], ['monthUsage', '30 天用量'], ['expiresAt', '到期时间']].map(([name, label]) => `<label class="key-column-toggle"><input type="checkbox" data-key-column="${name}" ${visible[name] ? 'checked' : ''} />${label}</label>`).join('')
+  $('#content').innerHTML = `<div class="page-stack"><div class="page-toolbar"><div class="toolbar-copy"><h2>你的访问凭据</h2><p>管理调用权限、限额与故障转移策略。</p></div><button class="primary-button" data-action="create-key"><i data-lucide="plus"></i>新建 Key</button></div><section class="panel key-list-panel"><form id="key-list-filters" class="key-list-filters"><input name="key-search" value="${escapeHTML(state.keyList.search)}" placeholder="搜索 Key 名称" /><select name="key-group-filter"><option value="">全部分组</option>${groupOptions}</select><select name="key-status-filter"><option value="">全部状态</option><option value="active" ${state.keyList.status === 'active' ? 'selected' : ''}>active</option><option value="inactive" ${state.keyList.status === 'inactive' ? 'selected' : ''}>inactive</option></select><select name="key-page-size"><option value="20" ${state.keyList.pageSize === 20 ? 'selected' : ''}>20 / 页</option><option value="50" ${state.keyList.pageSize === 50 ? 'selected' : ''}>50 / 页</option><option value="100" ${state.keyList.pageSize === 100 ? 'selected' : ''}>100 / 页</option></select><button type="button" class="secondary-button" data-action="key-apply-filters"><i data-lucide="search"></i>筛选</button></form><div class="key-list-tools"><div class="key-column-toggles">${columnToggles}</div><div class="key-endpoints"><a data-key-endpoint href="https://aihub.top/v1" target="_blank" rel="noreferrer">默认 API</a><button class="icon-button" data-action="copy-key-endpoint" data-endpoint="https://aihub.top/v1" title="复制默认 API" aria-label="复制默认 API"><i data-lucide="copy"></i></button><a data-key-endpoint href="https://aihub.top/v1/images/generations" target="_blank" rel="noreferrer">图片 API</a><button class="icon-button" data-action="copy-key-endpoint" data-endpoint="https://aihub.top/v1/images/generations" title="复制图片 API" aria-label="复制图片 API"><i data-lucide="copy"></i></button><button class="icon-button" data-action="test-key-endpoint" data-endpoint="https://aihub.top/v1" title="测速" aria-label="测速"><i data-lucide="gauge"></i></button></div></div>${rows ? `<div class="data-table-wrap"><table class="data-table key-list-table"><thead><tr><th>名称</th><th>状态</th><th>分组</th><th>额度</th>${optionalHeaders}<th>最后使用</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : empty('key-round', '还没有 API Key', '创建一个 Key 后即可连接客户端。', '<button class="primary-button" data-action="create-key"><i data-lucide="plus"></i>新建 Key</button>')}${keyListPagination(keys.total, keys.pages)}</section></div>`
+  $$('[data-action="configure-client-key"]', $('#content')).forEach((button) => {
+    const key = state.keys.find((item) => String(item.id) === button.dataset.id)
+    if (key?.status !== 'active') button.remove()
+  })
   icons($('#content'))
 }
 
@@ -1192,7 +1207,42 @@ function keyGroupRate(group) {
   return Number(group?.user_rate ?? group?.rate_multiplier ?? group?.rate ?? 1)
 }
 
-function keyPolicyFields(key = {}) {
+function keyNumber(value) {
+  return Math.max(0, Number(value || 0))
+}
+
+function keyIPAddressList(value) {
+  return String(value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+}
+
+function localDateTime(value) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const offset = date.getTimezoneOffset() * 60000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16)
+}
+
+function orderedFailoverGroupIds(form) {
+  return $$('[data-failover-group-id]', form)
+    .filter((row) => row.querySelector('input')?.checked && !row.querySelector('input').disabled)
+    .map((row) => Number(row.dataset.failoverGroupId))
+    .filter((id) => id > 0)
+}
+
+function moveFailoverGroup(form, groupId, direction) {
+  const row = form.querySelector(`[data-failover-group-id="${groupId}"]`)
+  if (!row) return
+  const selected = $$('[data-failover-group-id]', form).filter((item) => item.querySelector('input')?.checked && !item.querySelector('input').disabled)
+  const index = selected.indexOf(row)
+  const swapWith = selected[index + direction]
+  if (!swapWith) return
+  if (direction < 0) swapWith.before(row)
+  else swapWith.after(row)
+  syncKeyPolicyForm()
+}
+
+function keyFailoverControls(key = {}) {
   const selectedFailover = (key.failover_group_ids || []).map(String)
   const selectedExcluded = new Set((key.failover_excluded_group_ids || []).map(String))
   const selectedGroups = new Set(selectedFailover)
@@ -1200,68 +1250,134 @@ function keyPolicyFields(key = {}) {
     ...selectedFailover.map((id) => state.groups.find((group) => String(group.id) === id)).filter(Boolean),
     ...state.groups.filter((group) => !selectedGroups.has(String(group.id))),
   ]
-  const groupChecks = orderedGroups.map((group) => `<label class="failover-group-option"><input type="checkbox" name="failover_group_ids" value="${escapeHTML(group.id)}" ${selectedGroups.has(String(group.id)) ? 'checked' : ''} /><span><strong>${escapeHTML(group.name)}</strong><small>${number(keyGroupRate(group), 2)}x</small></span></label>`).join('')
+  const groupChecks = orderedGroups.map((group) => `<div class="failover-group-option" data-failover-group-id="${escapeHTML(group.id)}"><input type="checkbox" name="failover_group_ids" value="${escapeHTML(group.id)}" ${selectedGroups.has(String(group.id)) ? 'checked' : ''} /><span><strong>${escapeHTML(group.name)}</strong><small>${number(keyGroupRate(group), 2)}x</small></span><span class="failover-order-actions"><button type="button" class="icon-button" data-action="move-failover-group-up" data-group-id="${escapeHTML(group.id)}" title="上移" aria-label="上移"><i data-lucide="arrow-up"></i></button><button type="button" class="icon-button" data-action="move-failover-group-down" data-group-id="${escapeHTML(group.id)}" title="下移" aria-label="下移"><i data-lucide="arrow-down"></i></button></span></div>`).join('')
   const excludedChecks = state.groups.map((group) => `<label class="failover-group-option"><input type="checkbox" name="failover_excluded_group_ids" value="${escapeHTML(group.id)}" ${selectedExcluded.has(String(group.id)) ? 'checked' : ''} /><span><strong>${escapeHTML(group.name)}</strong><small>${number(keyGroupRate(group), 2)}x</small></span></label>`).join('')
-  return `<label><span>最大倍率（0 = 不限制）</span><input name="max_rate_multiplier" type="number" min="0" step="0.01" value="${escapeHTML(key.max_rate_multiplier ?? 0)}" placeholder="0 = 不限制" /><small>设置为 0 时不限制倍率；填写大于 0 的上限后，分组倍率超过该值时 Key 才会停止调用并返回错误。</small></label>
-    <label class="key-policy-toggle"><input name="rate_change_notify_enabled" type="checkbox" ${key.rate_change_notify_enabled ? 'checked' : ''} /><span><strong>倍率变动通知</strong><small>分组倍率变化时，由 AIHub 官方接口发送通知</small></span></label>
-    <label class="span-two key-policy-toggle"><input name="failover_enabled" type="checkbox" ${key.failover_enabled ? 'checked' : ''} /><span><strong>启用故障转移</strong><small>策略提交到 AIHub 官方接口，由网站服务端在当前分组不可用时执行</small></span></label>
+  return `<label class="key-policy-toggle"><input name="rate_change_notify_enabled" type="checkbox" ${key.rate_change_notify_enabled ? 'checked' : ''} /><span><strong>倍率变动通知</strong><small>分组倍率变化时发送通知</small></span></label>
+    <label class="span-two key-policy-toggle"><input name="failover_enabled" type="checkbox" ${key.failover_enabled ? 'checked' : ''} /><span><strong>启用故障转移</strong><small>当前分组不可用时由 AIHub 服务端切换</small></span></label>
     <div id="key-failover-options" class="span-two key-failover-options">
-      <div class="failover-strategy-row"><span class="field-label">转移策略</span><div class="failover-strategy-segments"><label><input type="radio" name="failover_strategy" value="manual" ${!['lowest_rate', 'fastest'].includes(key.failover_strategy) ? 'checked' : ''} /><span><strong>自选分组</strong><small>仅在指定分组中转移</small></span></label><label><input type="radio" name="failover_strategy" value="lowest_rate" ${key.failover_strategy === 'lowest_rate' ? 'checked' : ''} /><span><strong>最低倍率</strong><small>自动选择倍率最低的可用组</small></span></label><label><input type="radio" name="failover_strategy" value="fastest" ${key.failover_strategy === 'fastest' ? 'checked' : ''} /><span><strong>最快响应</strong><small>自动选择最快的可用组</small></span></label></div></div>
-      <div id="manual-failover-groups"><div class="failover-groups-heading"><span class="field-label">备用分组</span><small>主分组自动排除；按列表顺序尝试</small></div><div class="failover-group-grid">${groupChecks}</div></div>
+      <div class="failover-strategy-row"><span class="field-label">转移策略</span><div class="failover-strategy-segments"><label><input type="radio" name="failover_strategy" value="manual" ${!['lowest_rate', 'fastest'].includes(key.failover_strategy) ? 'checked' : ''} /><span><strong>按我选择的分组顺序</strong><small>按列表顺序尝试候选分组</small></span></label><label><input type="radio" name="failover_strategy" value="lowest_rate" ${key.failover_strategy === 'lowest_rate' ? 'checked' : ''} /><span><strong>按最低倍率优先</strong><small>自动选择倍率最低的可用分组</small></span></label><label><input type="radio" name="failover_strategy" value="fastest" ${key.failover_strategy === 'fastest' ? 'checked' : ''} /><span><strong>按最快首字优先</strong><small>自动选择首字最快的可用分组</small></span></label></div></div>
+      <div id="manual-failover-groups"><div class="failover-groups-heading"><span class="field-label">备用分组</span><small>主分组自动排除；列表顺序即提交顺序</small></div><div class="failover-group-grid">${groupChecks}</div></div>
       <div id="automatic-failover-exclusions"><div class="failover-groups-heading"><span class="field-label">排除分组</span><small>自动策略不会选择这些分组</small></div><div class="failover-group-grid">${excludedChecks}</div></div>
-      <div class="failover-strategy-row"><span class="field-label">恢复主分组</span><div class="failover-recovery-segments"><label><input type="radio" name="failover_recovery_mode" value="sticky" ${key.failover_recovery_mode !== 'prefer_primary' && key.failover_recovery_mode !== 'manual_only' ? 'checked' : ''} /><span><strong>保持当前</strong><small>恢复后继续使用当前组</small></span></label><label><input type="radio" name="failover_recovery_mode" value="prefer_primary" ${key.failover_recovery_mode === 'prefer_primary' ? 'checked' : ''} /><span><strong>优先主组</strong><small>主组恢复后优先切回</small></span></label><label><input type="radio" name="failover_recovery_mode" value="manual_only" ${key.failover_recovery_mode === 'manual_only' ? 'checked' : ''} /><span><strong>仅手动</strong><small>仅在手动策略中切换</small></span></label></div></div>
+      <div class="failover-strategy-row"><span class="field-label">恢复主分组</span><div class="failover-recovery-segments"><label><input type="radio" name="failover_recovery_mode" value="sticky" ${key.failover_recovery_mode !== 'prefer_primary' && key.failover_recovery_mode !== 'manual_only' ? 'checked' : ''} /><span><strong>自然回切（推荐）</strong><small>稳定恢复后自然回切</small></span></label><label><input type="radio" name="failover_recovery_mode" value="prefer_primary" ${key.failover_recovery_mode === 'prefer_primary' ? 'checked' : ''} /><span><strong>积极回主</strong><small>主组离开冷却后立即回切</small></span></label><label><input type="radio" name="failover_recovery_mode" value="manual_only" ${key.failover_recovery_mode === 'manual_only' ? 'checked' : ''} /><span><strong>不自动回切</strong><small>仅在用户修改策略后返回主组</small></span></label></div></div>
     </div>`
+}
+
+function keyPolicyFields(key = {}) {
+  const isCreate = !key.id
+  const ipEnabled = (key.ip_whitelist || []).length || (key.ip_blacklist || []).length
+  const rateEnabled = ['rate_limit_5h', 'rate_limit_1d', 'rate_limit_7d'].some((name) => keyNumber(key[name]) > 0)
+  const expirationEnabled = Boolean(key.expires_at)
+  return `<label><span>最大倍率（0 = 不限制）</span><input name="max_rate_multiplier" type="number" min="0" step="0.01" value="${escapeHTML(key.max_rate_multiplier ?? 0)}" /></label>
+    ${isCreate ? `<label class="key-policy-toggle"><input name="use_custom_key" type="checkbox" /><span><strong>使用自定义 Key</strong><small>仅创建时可设置，密钥不会回显或保存到桌面端状态</small></span></label><label id="custom-key-field" class="span-two hidden"><span>自定义 Key</span><input name="custom_key" type="password" minlength="16" pattern="[A-Za-z0-9_-]+" autocomplete="off" /></label>` : ''}
+    <label class="span-two key-policy-toggle"><input name="enable_ip_restriction" type="checkbox" ${ipEnabled ? 'checked' : ''} /><span><strong>限制来源 IP</strong><small>每行一个地址；关闭时会清空服务端白名单和黑名单</small></span></label>
+    <div id="key-ip-lists" class="span-two key-advanced-grid"><label><span>IP 白名单</span><textarea name="ip_whitelist" rows="3">${escapeHTML((key.ip_whitelist || []).join('\n'))}</textarea></label><label><span>IP 黑名单</span><textarea name="ip_blacklist" rows="3">${escapeHTML((key.ip_blacklist || []).join('\n'))}</textarea></label></div>
+    <label class="span-two key-policy-toggle"><input name="enable_rate_limit" type="checkbox" ${rateEnabled ? 'checked' : ''} /><span><strong>滚动限额</strong><small>关闭或填写非正数时会提交 0</small></span></label>
+    <div id="key-rate-limits" class="span-two key-advanced-grid three"><label><span>5 小时</span><input name="rate_limit_5h" type="number" min="0" value="${escapeHTML(key.rate_limit_5h ?? 0)}" /></label><label><span>1 天</span><input name="rate_limit_1d" type="number" min="0" value="${escapeHTML(key.rate_limit_1d ?? 0)}" /></label><label><span>7 天</span><input name="rate_limit_7d" type="number" min="0" value="${escapeHTML(key.rate_limit_7d ?? 0)}" /></label></div>
+    ${isCreate ? '' : `<label class="span-two key-policy-toggle"><input name="enable_expiration" type="checkbox" ${expirationEnabled ? 'checked' : ''} /><span><strong>设置到期时间</strong><small>关闭后会清空到期时间</small></span></label><label id="key-expiration-field" class="span-two"><span>到期时间</span><input name="expires_at" type="datetime-local" value="${escapeHTML(localDateTime(key.expires_at))}" /></label>`}
+    ${keyFailoverControls(key)}`
 }
 
 function syncKeyPolicyForm() {
   const form = $('#create-key-form')
   if (!form) return
-  const enabled = form.elements.failover_enabled.checked
-  const strategy = form.elements.failover_strategy.value
   const primaryGroupId = String(form.elements.group_id.value || '')
   $$('[name="failover_group_ids"], [name="failover_excluded_group_ids"]', form).forEach((input) => {
     const isPrimary = Boolean(primaryGroupId) && input.value === primaryGroupId
     input.disabled = isPrimary
     if (isPrimary) input.checked = false
-    input.closest('.failover-group-option')?.classList.toggle('disabled', isPrimary)
+    input.closest('.failover-group-option')?.classList.toggle('hidden', isPrimary)
   })
+  const enabled = form.elements.failover_enabled.checked
+  const strategy = form.elements.failover_strategy.value
   $('#key-failover-options')?.classList.toggle('hidden', !enabled)
   $('#manual-failover-groups')?.classList.toggle('hidden', !enabled || strategy !== 'manual')
   $('#automatic-failover-exclusions')?.classList.toggle('hidden', !enabled || strategy === 'manual')
+  const orderedCandidates = $$('[data-failover-group-id]', form).filter((row) => row.querySelector('input')?.checked && !row.querySelector('input').disabled)
+  orderedCandidates.forEach((row, index) => {
+    const up = row.querySelector('[data-action="move-failover-group-up"]')
+    const down = row.querySelector('[data-action="move-failover-group-down"]')
+    if (up) up.disabled = index === 0
+    if (down) down.disabled = index === orderedCandidates.length - 1
+  })
+  const custom = form.elements.use_custom_key
+  $('#custom-key-field')?.classList.toggle('hidden', !custom?.checked)
+  if (form.elements.custom_key) form.elements.custom_key.required = Boolean(custom?.checked)
+  const ipEnabled = Boolean(form.elements.enable_ip_restriction?.checked)
+  $('#key-ip-lists')?.classList.toggle('hidden', !ipEnabled)
+  const rateEnabled = Boolean(form.elements.enable_rate_limit?.checked)
+  $('#key-rate-limits')?.classList.toggle('hidden', !rateEnabled)
+  const expirationEnabled = Boolean(form.elements.enable_expiration?.checked)
+  $('#key-expiration-field')?.classList.toggle('hidden', !expirationEnabled)
 }
 
 function keyFailoverPayload(form, primaryGroupId) {
-  const enabled = form.elements.failover_enabled.checked
-  const strategy = form.elements.failover_strategy.value || 'manual'
-  // The desktop app only persists the policy; AIHub executes failover server-side.
+  const enabled = Boolean(form.elements.failover_enabled?.checked)
+  const strategy = form.elements.failover_strategy?.value || 'manual'
+  const primary = Number(primaryGroupId) || 0
   return {
     rate_change_notify_enabled: Boolean(form.elements.rate_change_notify_enabled?.checked),
     failover_enabled: enabled,
     failover_strategy: strategy,
-    failover_group_ids: enabled && strategy === 'manual'
-      ? new FormData(form).getAll('failover_group_ids').map(Number).filter((id) => id > 0 && id !== primaryGroupId)
-      : [],
-    failover_excluded_group_ids: enabled && strategy !== 'manual'
-      ? new FormData(form).getAll('failover_excluded_group_ids').map(Number).filter((id) => id > 0 && id !== primaryGroupId)
-      : [],
-    failover_recovery_mode: form.elements.failover_recovery_mode.value || 'sticky',
+    failover_group_ids: enabled && strategy === 'manual' ? orderedFailoverGroupIds(form).filter((id) => id !== primary) : [],
+    failover_excluded_group_ids: enabled && strategy !== 'manual' ? new FormData(form).getAll('failover_excluded_group_ids').map(Number).filter((id) => id > 0 && id !== primary) : [],
+    failover_recovery_mode: form.elements.failover_recovery_mode?.value || 'sticky',
+  }
+}
+
+function advancedKeyPayload(form, primaryGroupId) {
+  const data = new FormData(form)
+  const ipsEnabled = data.get('enable_ip_restriction') === 'on'
+  const ratesEnabled = data.get('enable_rate_limit') === 'on'
+  const expirationEnabled = data.get('enable_expiration') === 'on'
+  const rawExpiration = String(data.get('expires_at') || '')
+  const expiration = new Date(rawExpiration)
+  return {
+    ip_whitelist: ipsEnabled ? keyIPAddressList(data.get('ip_whitelist')) : [],
+    ip_blacklist: ipsEnabled ? keyIPAddressList(data.get('ip_blacklist')) : [],
+    rate_limit_5h: ratesEnabled ? keyNumber(data.get('rate_limit_5h')) : 0,
+    rate_limit_1d: ratesEnabled ? keyNumber(data.get('rate_limit_1d')) : 0,
+    rate_limit_7d: ratesEnabled ? keyNumber(data.get('rate_limit_7d')) : 0,
+    expires_at: expirationEnabled && rawExpiration && !Number.isNaN(expiration.getTime()) ? expiration.toISOString() : '',
+    ...keyFailoverPayload(form, primaryGroupId),
   }
 }
 
 function createKeyModal(key = null) {
   state.editingKeyId = key?.id || null
-  const options = state.groups.map((group) => `<option value="${group.id}" ${String(state.preferredGroupId || '') === String(group.id) ? 'selected' : ''}>${escapeHTML(group.name)} · ${number(group.rate_multiplier ?? group.user_rate ?? 1, 2)}x</option>`).join('')
   const selectedGroup = key?.group_id ?? state.preferredGroupId
-  const selectedOptions = state.groups.map((group) => `<option value="${group.id}" ${String(selectedGroup || '') === String(group.id) ? 'selected' : ''}>${escapeHTML(group.name)} · ${number(keyGroupRate(group), 2)}x</option>`).join('')
-  openModal(key ? '编辑 API Key' : '新建 API Key', `<form id="create-key-form" class="form-grid key-editor-form">
-    <label class="span-two"><span>名称</span><input name="name" value="${escapeHTML(key?.name || '')}" placeholder="例如：Codex" required /></label>
-    <label class="span-two"><span>分组</span><select name="group_id"><option value="">自动选择</option>${selectedOptions || options}</select></label>
-    <label><span>额度上限（USD）</span><input name="quota" type="number" min="0" step="0.01" value="${escapeHTML(key?.quota || '')}" placeholder="0 = 不限制" /></label>
-    ${key ? '' : '<label><span>有效天数</span><input name="expires_in_days" type="number" min="1" placeholder="留空 = 永久" /></label>'}
-    ${keyPolicyFields(key || {})}
-  </form>`, `<button class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" data-action="${key ? 'submit-update-key' : 'submit-create-key'}"><i data-lucide="${key ? 'save' : 'key-round'}"></i>${key ? '保存' : '创建'}</button>`)
+  const groupOptions = state.groups.map((group) => `<option value="${group.id}" ${String(selectedGroup || '') === String(group.id) ? 'selected' : ''}>${escapeHTML(group.name)} · ${number(keyGroupRate(group), 2)}x</option>`).join('')
+  openModal(key ? '编辑 API Key' : '新建 API Key', `<form id="create-key-form" class="form-grid key-editor-form"><label class="span-two"><span>名称</span><input name="name" value="${escapeHTML(key?.name || '')}" required /></label><label class="span-two"><span>分组</span><select name="group_id"><option value="">自动选择</option>${groupOptions}</select></label><label><span>额度上限（USD）</span><input name="quota" type="number" min="0" step="0.01" value="${escapeHTML(key?.quota || '')}" /></label>${key ? '' : '<label><span>有效天数</span><input name="expires_in_days" type="number" min="1" placeholder="留空 = 永久" /></label>'}${keyPolicyFields(key || {})}</form>`, `<button class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" data-action="${key ? 'submit-update-key' : 'submit-create-key'}"><i data-lucide="${key ? 'save' : 'key-round'}"></i>${key ? '保存' : '创建'}</button>`)
   syncKeyPolicyForm()
   $('#create-key-form input').focus()
+}
+
+async function submitCreateKey(target) {
+  const form = $('#create-key-form')
+  if (!form.reportValidity()) return
+  const data = new FormData(form)
+  const groupId = Number(data.get('group_id')) || null
+  const { expires_at, ...advanced } = advancedKeyPayload(form, groupId)
+  const body = { name: String(data.get('name') || '').trim(), max_rate_multiplier: keyNumber(data.get('max_rate_multiplier')), ...advanced }
+  if (groupId) body.group_id = groupId
+  if (keyNumber(data.get('quota')) > 0) body.quota = keyNumber(data.get('quota'))
+  if (keyNumber(data.get('expires_in_days')) > 0) body.expires_in_days = keyNumber(data.get('expires_in_days'))
+  if (data.get('use_custom_key') === 'on') body.custom_key = String(data.get('custom_key') || '').trim()
+  setBusy(target, true, '创建中')
+  const key = await request('/keys', { method: 'POST', body })
+  openModal('API Key 已创建', `<div class="secret-output"><span class="muted">请妥善保存</span><code id="created-key">${escapeHTML(key.key)}</code><button class="secondary-button" data-action="copy-created-key"><i data-lucide="copy"></i>复制 Key</button></div>`, '<button class="primary-button" data-action="finish-create-key">完成</button>')
+}
+
+async function submitUpdateKey(target) {
+  const form = $('#create-key-form')
+  if (!form.reportValidity()) return
+  const data = new FormData(form)
+  const groupId = Number(data.get('group_id')) || null
+  const body = { name: String(data.get('name') || '').trim(), group_id: groupId, quota: keyNumber(data.get('quota')), max_rate_multiplier: keyNumber(data.get('max_rate_multiplier')), ...advancedKeyPayload(form, groupId) }
+  setBusy(target, true, '保存中')
+  await request(`/keys/${state.editingKeyId}`, { method: 'PUT', body })
+  closeModal()
+  toast('API Key 策略已更新')
+  await navigate('keys')
 }
 
 async function useProviderGroupModal(groupId, name, rateMultiplier) {
@@ -1292,6 +1408,8 @@ function createClientProfileModal() {
     ${editors}
     <p class="span-two config-safety-note"><i data-lucide="shield-check"></i>仅会写入 ${escapeHTML(clientName)} 的已知配置路径；应用前自动备份，写入失败自动回滚。</p>
   </form>`, '<button class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" data-action="submit-client-profile"><i data-lucide="save"></i>保存配置档</button>')
+  const selectedKey = $('#client-template-key')
+  if (selectedKey && state.clientSelectedKeyId) selectedKey.value = String(state.clientSelectedKeyId)
   $('#client-profile-form input').focus()
 }
 
@@ -1365,6 +1483,27 @@ async function handleContentClick(event) {
     return renderLogs()
   }
   const action = target.dataset.action
+  if (action === 'keys-prev') { state.keyList.page = Math.max(1, state.keyList.page - 1); return renderKeys() }
+  if (action === 'keys-next') { state.keyList.page += 1; return renderKeys() }
+  if (action === 'key-apply-filters') {
+    const form = $('#key-list-filters')
+    state.keyList = { ...state.keyList, page: 1, search: String(form.elements['key-search'].value || '').trim(), groupId: form.elements['key-group-filter'].value, status: form.elements['key-status-filter'].value, pageSize: Number(form.elements['key-page-size'].value) || 20 }
+    return renderKeys()
+  }
+  if (target.matches('[data-key-column]')) {
+    state.keyList.columns[target.dataset.keyColumn] = target.checked
+    return renderKeys()
+  }
+  if (action === 'copy-key-endpoint') {
+    await window.aihub.copyText(target.dataset.endpoint)
+    toast('API 地址已复制')
+    return
+  }
+  if (action === 'test-key-endpoint') {
+    const url = new URL(target.dataset.endpoint)
+    if (url.protocol === 'https:') await window.aihub.openExternal(url.href)
+    return
+  }
   if (action === 'retry') return navigate(state.route)
   if (action === 'open-guide-link') return window.aihub.openExternal(target.dataset.url)
   if (action === 'copy-guide-code') {
@@ -1465,6 +1604,10 @@ async function handleContentClick(event) {
     return
   }
   if (action === 'create-key') return createKeyModal()
+  if (action === 'configure-client-key') {
+    state.clientSelectedKeyId = Number(target.dataset.id) || null
+    return navigate('clients')
+  }
   if (action === 'edit-key') {
     const key = await request(`/keys/${target.dataset.id}`)
     return createKeyModal(key)
@@ -1514,6 +1657,12 @@ async function handleModalClick(event) {
   const target = event.target.closest('[data-action]')
   if (!target) return
   const action = target.dataset.action
+  if (action === 'move-failover-group-up' || action === 'move-failover-group-down') {
+    moveFailoverGroup($('#create-key-form'), Number(target.dataset.groupId), action.endsWith('up') ? -1 : 1)
+    return
+  }
+  if (action === 'submit-create-key') return submitCreateKey(target)
+  if (action === 'submit-update-key') return submitUpdateKey(target)
   if (action === 'close-modal') {
     if (event.target.closest('.modal') && !event.target.closest('button[data-action="close-modal"]')) return
     return closeModal()

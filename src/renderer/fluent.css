@@ -611,3 +611,19 @@ textarea { min-height: 90px; resize: vertical; }
 @media (max-width: 820px) { .guide-grid { grid-template-columns: 1fr; } }
 @media (max-width: 680px) { .guide-hero { align-items: flex-start; flex-direction: column; padding: 16px; } }
 @media (max-width: 680px) { .page-intro, .about-hero { align-items: flex-start; flex-direction: column; padding: 16px; } }
+.key-list-filters { display: grid; grid-template-columns: minmax(150px,1.4fr) repeat(3,minmax(110px,.7fr)) auto; gap: 8px; padding: 12px 15px; border-bottom: 1px solid var(--line); background: var(--surface-muted); }
+.key-list-filters input,.key-list-filters select { min-width: 0; min-height: 34px; }
+.key-list-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 15px; border-bottom: 1px solid var(--line-soft); }
+.key-column-toggles,.key-endpoints { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.key-column-toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.key-column-toggle input { width: 14px; min-height: 14px; margin: 0; accent-color: var(--accent); }
+.key-endpoints a { color: var(--accent); font-size: 9px; text-decoration: none; }
+.key-endpoints .icon-button,.failover-order-actions .icon-button { width: 25px; height: 25px; }
+.key-advanced-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.key-advanced-grid.three { grid-template-columns: repeat(3,minmax(0,1fr)); }
+.key-advanced-grid textarea { min-height: 64px; resize: vertical; }
+.failover-group-option { position: relative; }
+.failover-group-option > .failover-order-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.failover-group-option > .failover-order-actions button { flex: 0 0 auto; }
+@media (max-width: 900px) { .key-list-filters { grid-template-columns: repeat(2,minmax(0,1fr)); } .key-list-tools { align-items: flex-start; flex-direction: column; } }
+@media (max-width: 620px) { .key-advanced-grid,.key-advanced-grid.three { grid-template-columns: 1fr; } .failover-group-grid { grid-template-columns: 1fr; } }
