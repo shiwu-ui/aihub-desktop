@@ -7,8 +7,11 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 const nsis = pkg.build.nsis
+const rendererSource = fs.readFileSync(path.join(root, 'src', 'renderer', 'app.js'), 'utf8')
 
-assert.equal(pkg.version, '1.0.6')
+assert.equal(pkg.version, '1.1.0')
+assert.match(rendererSource, /const APP_VERSION = '1\.1\.0'/)
+assert.doesNotMatch(rendererSource, /renderPlans|\/subscriptions|open-purchase-page/)
 assert.equal(pkg.build.appId, 'top.aihub.desktop')
 assert.equal(nsis.oneClick, false)
 assert.equal(nsis.allowToChangeInstallationDirectory, false)

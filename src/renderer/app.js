@@ -2,7 +2,7 @@ const $ = (selector, root = document) => root.querySelector(selector)
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)]
 
 const THEME_STORAGE_KEY = 'aihub-theme-v2'
-const APP_VERSION = '1.0.6'
+const APP_VERSION = '1.1.0'
 const savedTheme = localStorage.getItem(THEME_STORAGE_KEY)
 document.documentElement.classList.toggle('dark', savedTheme ? savedTheme === 'dark' : true)
 
@@ -54,7 +54,6 @@ const routeMeta = {
   providers: ['PROVIDER HALL', '供应商大厅'],
   clients: ['CLIENT CONFIG', '客户端配置'],
   guide: ['USER GUIDE', '使用教程'],
-  plans: ['PLANS', '套餐'],
   billing: ['RECHARGE', '充值'],
   invoices: ['INVOICES', '自助发票'],
   redeem: ['REDEEM', '兑换码'],
@@ -282,7 +281,12 @@ function showApp(user) {
   navigate('dashboard')
 }
 
+function normalizeRoute(route) {
+  return route === 'plans' ? 'billing' : route
+}
+
 async function navigate(route) {
+  route = normalizeRoute(route)
   if (state.route === 'billing' && route !== 'billing') cleanupPaymentPolling(true)
   if (state.dashboardChart) {
     state.dashboardChart.destroy()
@@ -296,7 +300,7 @@ async function navigate(route) {
   $('#page-title').textContent = routeMeta[route][1]
   loadingPage()
   try {
-    await ({ dashboard: renderDashboard, keys: renderKeys, usage: renderUsage, logs: renderLogs, providers: renderProviders, clients: renderClients, guide: renderGuide, plans: renderPlans, billing: renderBilling, invoices: renderInvoices, redeem: renderRedeem, affiliate: renderAffiliate, account: renderAccount, changelog: renderChangelog, about: renderAbout }[route])()
+    await ({ dashboard: renderDashboard, keys: renderKeys, usage: renderUsage, logs: renderLogs, providers: renderProviders, clients: renderClients, guide: renderGuide, billing: renderBilling, invoices: renderInvoices, redeem: renderRedeem, affiliate: renderAffiliate, account: renderAccount, changelog: renderChangelog, about: renderAbout }[route])()
   } catch (error) {
     $('#content').innerHTML = `<div class="page-stack">${empty('cloud-off', '暂时无法载入', error.message, '<button class="secondary-button" data-action="retry"><i data-lucide="refresh-cw"></i>重试</button>')}</div>`
     icons($('#content'))
@@ -820,23 +824,6 @@ async function openLogDetail(id) {
   </div>`, '<button class="primary-button" data-action="close-modal">完成</button>')
 }
 
-async function renderPlans() {
-  const [summary, subscriptions, checkout] = await Promise.all([
-    request('/subscriptions/summary').catch(() => ({ active_count: 0 })),
-    request('/subscriptions').catch(() => []),
-    request('/payment/checkout-info').catch(() => ({ plans: [] })),
-  ])
-  const activeRows = subscriptions?.length ? subscriptions.map((item) => `<div class="plan-active-row"><div><strong>${escapeHTML(item.group?.name || `订阅 #${item.id}`)}</strong><span>${item.expires_at ? `到期 ${dateTime(item.expires_at)}` : '长期有效'} · 本月 ${money(item.monthly_usage_usd)}</span></div><span class="status-badge ${escapeHTML(item.status)}">${escapeHTML(item.status)}</span></div>`).join('') : empty('package-open', '暂无有效套餐', '购买套餐后，额度与到期状态会显示在这里。')
-  const plans = (checkout?.plans || []).filter((plan) => plan.for_sale !== false)
-  const planCards = plans.map((plan) => `<article class="plan-card"><div class="plan-card-top"><span class="eyebrow">${escapeHTML(plan.group_platform || 'AI API')}</span><span class="status-badge active">${number(plan.rate_multiplier ?? 1, 2)}x</span></div><h3>${escapeHTML(plan.name)}</h3><p>${escapeHTML(plan.description || '按套餐额度使用对应模型分组。')}</p><div class="plan-card-price">${gatewayMoney(plan.price, plan.currency || 'USD')}<small>/ ${number(plan.validity_days)} ${escapeHTML(plan.validity_unit || '天')}</small></div><button class="secondary-button wide" data-action="open-purchase-page"><i data-lucide="external-link"></i>前往官网购买</button></article>`).join('')
-  $('#content').innerHTML = `<div class="page-stack">
-    <div class="metrics-grid">${metric('有效套餐', number(summary?.active_count), '当前可用订阅', 'badge-check', 'green')}${metric('可购套餐', number(plans.length), 'AIHub 官方套餐', 'package-open', 'blue')}</div>
-    <section class="panel"><div class="panel-header"><div><h2>当前套餐</h2><p>额度与到期状态</p></div></div><div class="panel-body plan-active-list">${activeRows}</div></section>
-    <section class="panel"><div class="panel-header"><div><h2>可购套餐</h2><p>套餐支付将在 AIHub 官网完成</p></div></div><div class="panel-body plan-grid">${planCards || empty('package-open', '暂无可购套餐', '站点暂时没有发布可购买套餐。')}</div></section>
-  </div>`
-  icons($('#content'))
-}
-
 function redeemHistoryTitle(item) {
   if (item.type === 'balance') return '余额充值（兑换）'
   if (item.type === 'concurrency') return '并发增加（兑换）'
@@ -1143,13 +1130,15 @@ function renderGuide() {
     const action = section.action ? `<button class="secondary-button" data-route-jump="${section.action[0]}"><i data-lucide="arrow-up-right"></i>${section.action[1]}</button>` : section.link ? `<button class="secondary-button" data-action="open-guide-link" data-url="${escapeHTML(section.link[0])}"><i data-lucide="external-link"></i>${section.link[1]}</button>` : ''
     return `<article class="guide-section"><header><span class="guide-number">${section.number}</span><div><h2><i data-lucide="${section.icon}"></i>${section.title}</h2></div></header><div class="guide-section-body">${section.body}${code}${action}</div></article>`
   }).join('')
-  $('#content').innerHTML = `<div class="page-stack guide-page"><section class="guide-hero"><div><p class="eyebrow">AIHUB DESKTOP · USER GUIDE</p><h2>从环境准备到自动路由</h2><p>这份教程对应当前 1.0.6 桌面端，并同步 AIHub 站点当前八章结构。示例模型与工具版本可能随站点更新。</p></div><span class="status-badge active">v${APP_VERSION}</span></section><div class="guide-grid">${cards}</div><section class="panel guide-note"><div class="panel-body"><i data-lucide="shield-check"></i><div><strong>接口边界</strong><p>桌面端只通过普通用户接口访问 AIHub，拒绝管理员路径。API Key 的故障转移策略由 AIHub 服务端执行切换；桌面端不保存号池，也不代理模型请求。</p></div></div></section></div>`
+  $('#content').innerHTML = `<div class="page-stack guide-page"><section class="guide-hero"><div><p class="eyebrow">AIHUB DESKTOP · USER GUIDE</p><h2>从环境准备到自动路由</h2><p>这份教程对应当前 1.1.0 桌面端，并同步 AIHub 站点当前八章结构。示例模型与工具版本可能随站点更新。</p></div><span class="status-badge active">v${APP_VERSION}</span></section><div class="guide-grid">${cards}</div><section class="panel guide-note"><div class="panel-body"><i data-lucide="shield-check"></i><div><strong>接口边界</strong><p>桌面端只通过普通用户接口访问 AIHub，拒绝管理员路径。API Key 的故障转移策略由 AIHub 服务端执行切换；桌面端不保存号池，也不代理模型请求。</p></div></div></section></div>`
   icons($('#content'))
 }
 
 function renderChangelog() {
   const releases = [
-    { version: '1.0.6', date: '当前版本', title: '关于页布局优化', items: ['将关于本软件改为紧凑横向信息栏，避免品牌图占满首屏。', '软件信息、安全与隐私、帮助反馈在常用窗口尺寸下更易浏览。'] },
+    { version: '1.1.0', date: '当前版本', title: '充值优先的桌面工作台', items: ['移除套餐订阅入口，在线充值成为唯一购买流程。', '旧版套餐链接会自动转到充值页面，避免历史导航失效。'] },
+    { version: '1.0.7', date: '上一版本', title: '密钥策略、故障转移与自助发票', items: ['增加最高倍率、倍率变更通知、三种故障转移策略和三种回切模式。', '调用日志新增故障转移审计，自助发票和八章使用教程同步上线。'] },
+    { version: '1.0.6', date: '历史版本', title: '关于页布局优化', items: ['将关于本软件改为紧凑横向信息栏，避免品牌图占满首屏。', '软件信息、安全与隐私、帮助反馈在常用窗口尺寸下更易浏览。'] },
     { version: '1.0.5', date: '历史版本', title: '软件信息中心', items: ['在账户设置下新增“更新日志”和“关于本软件”两个独立页面。', '整理从 v1.0.1 至今的主要功能变化，便于快速了解每次更新。', '关于页面集中展示当前版本、运行平台、安全隐私和帮助信息。'] },
     { version: '1.0.4', date: '近期版本', title: '充值与版本管理', items: ['将“账单”统一更名为“充值”，充值流程和订单记录集中展示。', '正式打包自动清理旧版本产物，提供便携版、安装版和完整目录三种分发方式。', '完善安装版快捷方式与卸载入口，保留用户数据，升级更安心。'] },
     { version: '1.0.3', date: '近期版本', title: '支付、公告与用量体验', items: ['接入 AIHub 官方在线充值，支持二维码支付、官方收银台、订单查询、轮询和取消。', '公告支持 Markdown 渲染、代码块、表格、链接和已读状态。', '总览和用量增加缓存 Token 统计，明细区分缓存读取与写入。', '兑换码页面按账户余额、兑换输入、使用说明和最近活动重新整理。'] },
@@ -1162,7 +1151,7 @@ function renderChangelog() {
 }
 
 function renderAbout() {
-  $('#content').innerHTML = `<div class="page-stack about-page"><section class="about-hero"><img src="../../assets/icon.png" alt="AIHub Desktop" /><div><p class="eyebrow">AIHUB DESKTOP</p><h2>你的 API 工作台</h2><p>在 Windows 桌面上集中管理 AIHub 账户、API Key、用量、充值和客户端配置。</p></div><span class="status-badge active">v${APP_VERSION}</span></section><div class="two-column"><section class="panel"><div class="panel-header"><div><h2>软件信息</h2><p>当前运行版本与构建信息</p></div></div><div class="panel-body detail-list"><div class="detail-row"><span>软件名称</span><strong>AIHub Desktop</strong></div><div class="detail-row"><span>当前版本</span><strong>${APP_VERSION}</strong></div><div class="detail-row"><span>运行平台</span><strong>Windows x64</strong></div><div class="detail-row"><span>服务地址</span><strong>aihub.top</strong></div></div></section><section class="panel"><div class="panel-header"><div><h2>安全与隐私</h2><p>数据只用于完成你发起的操作</p></div></div><div class="panel-body about-copy"><p>本软件仅面向 AIHub 普通用户使用，不包含管理员功能。登录令牌保存在当前 Windows 用户的应用数据目录中，不会写入项目源码。</p><p>API Key 只会在你主动生成或保存客户端配置时使用。支付过程通过 AIHub 官方支付接口完成。</p></div></section></div><section class="panel"><div class="panel-header"><div><h2>帮助与反馈</h2><p>遇到问题时可先查看调用日志和启动诊断日志</p></div></div><div class="panel-body about-copy"><p>官方网站：<a href="https://aihub.top" target="_blank" rel="noreferrer">https://aihub.top</a></p><p>版本更新会继续同步到安装包、便携版和完整目录版本。</p></div></section><section class="panel"><div class="panel-header"><div><h2>致谢与开源许可</h2><p>当前 1.0.6 使用的开源项目和依赖</p></div></div><div class="panel-body about-copy attribution-list"><div><strong><a href="https://github.com/farion1231/cc-switch" target="_blank" rel="noreferrer">CC Switch</a></strong><span>MIT License · 客户端配置档、备份和切换工作流的实现参考</span></div><div><strong>Electron</strong><span>桌面窗口、系统托盘、网络请求和 Windows 安全存储</span></div><div><strong>Lucide · Chart.js · marked · DOMPurify · QRCode Generator</strong><span>图标、统计图表、公告 Markdown 安全渲染和支付二维码</span></div><div><strong>AIHub 官方接口</strong><span>账户、API Key、故障转移策略、供应商监测、用量和充值服务</span></div></div></section></div>`
+  $('#content').innerHTML = `<div class="page-stack about-page"><section class="about-hero"><img src="../../assets/icon.png" alt="AIHub Desktop" /><div><p class="eyebrow">AIHUB DESKTOP</p><h2>你的 API 工作台</h2><p>在 Windows 桌面上集中管理 AIHub 账户、API Key、用量、充值和客户端配置。</p></div><span class="status-badge active">v${APP_VERSION}</span></section><div class="two-column"><section class="panel"><div class="panel-header"><div><h2>软件信息</h2><p>当前运行版本与构建信息</p></div></div><div class="panel-body detail-list"><div class="detail-row"><span>软件名称</span><strong>AIHub Desktop</strong></div><div class="detail-row"><span>当前版本</span><strong>${APP_VERSION}</strong></div><div class="detail-row"><span>运行平台</span><strong>Windows x64</strong></div><div class="detail-row"><span>服务地址</span><strong>aihub.top</strong></div></div></section><section class="panel"><div class="panel-header"><div><h2>安全与隐私</h2><p>数据只用于完成你发起的操作</p></div></div><div class="panel-body about-copy"><p>本软件仅面向 AIHub 普通用户使用，不包含管理员功能。登录令牌保存在当前 Windows 用户的应用数据目录中，不会写入项目源码。</p><p>API Key 只会在你主动生成或保存客户端配置时使用。支付过程通过 AIHub 官方支付接口完成。</p></div></section></div><section class="panel"><div class="panel-header"><div><h2>帮助与反馈</h2><p>遇到问题时可先查看调用日志和启动诊断日志</p></div></div><div class="panel-body about-copy"><p>官方网站：<a href="https://aihub.top" target="_blank" rel="noreferrer">https://aihub.top</a></p><p>版本更新会继续同步到安装包、便携版和完整目录版本。</p></div></section><section class="panel"><div class="panel-header"><div><h2>致谢与开源许可</h2><p>当前 1.1.0 使用的开源项目和依赖</p></div></div><div class="panel-body about-copy attribution-list"><div><strong><a href="https://github.com/farion1231/cc-switch" target="_blank" rel="noreferrer">CC Switch</a></strong><span>MIT License · 客户端配置档、备份和切换工作流的实现参考</span></div><div><strong>Electron</strong><span>桌面窗口、系统托盘、网络请求和 Windows 安全存储</span></div><div><strong>Lucide · Chart.js · marked · DOMPurify · QRCode Generator</strong><span>图标、统计图表、公告 Markdown 安全渲染和支付二维码</span></div><div><strong>AIHub 官方接口</strong><span>账户、API Key、故障转移策略、供应商监测、用量和充值服务</span></div></div></section></div>`
   icons($('#content'))
 }
 
@@ -1383,7 +1372,6 @@ async function handleContentClick(event) {
     if (code) { await window.aihub.copyText(code); toast('命令已复制') }
     return
   }
-  if (action === 'open-purchase-page') return window.aihub.openExternal('https://aihub.top/purchase')
   if (action === 'announcement-detail') return openAnnouncementDetail(target.dataset.id)
   if (action === 'set-recharge-amount') {
     $('#recharge-amount').value = target.dataset.amount

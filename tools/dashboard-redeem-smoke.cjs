@@ -1,5 +1,6 @@
 'use strict'
 
+const assert = require('node:assert/strict')
 const { _electron: electron } = require('playwright-core')
 const fs = require('node:fs/promises')
 const os = require('node:os')
@@ -30,9 +31,9 @@ async function run() {
           { type: 'admin_balance', value: 10, notes: '管理员调整', used_at: '2026-07-17T10:14:56Z' },
           { type: 'admin_concurrency', value: 270, used_at: '2026-07-15T15:09:07Z' },
         ], total: 3 }
-        if (route === '/subscriptions/summary') return { active_count: 1 }
-        if (route === '/subscriptions') return [{ id: 1, status: 'active', group: { name: 'A012-Pro' }, expires_at: '2026-08-19T00:00:00Z', monthly_usage_usd: 2.4 }]
-        if (route === '/payment/checkout-info') return { plans: [{ id: 1, name: 'Pro 月度套餐', description: '适合日常开发和高频调用', price: 19.9, currency: 'USD', validity_days: 30, validity_unit: '天', rate_multiplier: .2, for_sale: true }] }
+        if (route.startsWith('/payment/orders/my')) return { items: [], total: 0 }
+        if (route === '/payment/config') return { payment_enabled: false }
+        if (route === '/payment/checkout-info') return { methods: {}, balance_disabled: true, balance_recharge_multiplier: 1, recharge_fee_rate: 0 }
         throw new Error(`Unexpected route: ${route}`)
       }
       await navigate('dashboard')
@@ -49,8 +50,12 @@ async function run() {
     await page.waitForSelector('.redeem-guide')
     const redeemRows = await page.locator('.redeem-activity-row').count()
     if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'redeem-page.png') })
-    await page.evaluate(() => navigate('plans'))
-    await page.waitForSelector('.plan-card')
+    const planRoute = await page.evaluate(async () => {
+      const normalized = normalizeRoute('plans')
+      await navigate('plans')
+      return { normalized, route: state.route }
+    })
+    await page.waitForSelector('.recharge-panel')
     const navLabels = await page.locator('#sidebar-nav .nav-item span').allTextContents()
     await page.evaluate(() => navigate('changelog'))
     await page.waitForSelector('.release-list')
@@ -60,8 +65,11 @@ async function run() {
     const aboutText = await page.textContent('#content')
     const overflow = await page.evaluate(() => ({ body: document.documentElement.scrollWidth - document.documentElement.clientWidth, content: document.querySelector('#content').scrollWidth - document.querySelector('#content').clientWidth }))
     if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'about-page.png') })
-    if (metricCount !== 8 || dashboardText.includes('订阅状态') || !dashboardText.includes('累计 Token') || redeemRows !== 3 || !navLabels.includes('套餐') || !navLabels.includes('充值') || !navLabels.includes('兑换码') || !navLabels.includes('更新日志') || !navLabels.includes('关于本软件') || releaseCount !== 6 || !aboutText.includes('1.0.6') || overflow.body > 1 || overflow.content > 1 || errors.length) throw new Error(JSON.stringify({ metricCount, dashboardText, redeemRows, navLabels, releaseCount, aboutText, overflow, errors }))
-    console.log(JSON.stringify({ ok: true, dashboardMetrics: 8, subscriptionRemoved: true, redeemActivity: redeemRows, releaseCount, aboutVersion: '1.0.6', overflow }))
+    assert.equal(navLabels.includes('套餐'), false)
+    assert.equal(planRoute.normalized, 'billing')
+    assert.equal(planRoute.route, 'billing')
+    if (metricCount !== 8 || dashboardText.includes('订阅状态') || !dashboardText.includes('累计 Token') || redeemRows !== 3 || !navLabels.includes('充值') || !navLabels.includes('兑换码') || !navLabels.includes('更新日志') || !navLabels.includes('关于本软件') || releaseCount !== 8 || !aboutText.includes('1.1.0') || overflow.body > 1 || overflow.content > 1 || errors.length) throw new Error(JSON.stringify({ metricCount, dashboardText, redeemRows, navLabels, planRoute, releaseCount, aboutText, overflow, errors }))
+    console.log(JSON.stringify({ ok: true, dashboardMetrics: 8, subscriptionRemoved: true, redeemActivity: redeemRows, planRoute, releaseCount, aboutVersion: '1.1.0', overflow }))
   } finally {
     await app.close()
     await fs.rm(sandbox, { recursive: true, force: true })
