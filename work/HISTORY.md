@@ -1,4 +1,10 @@
 时区：Asia/Shanghai
+[2026-07-27 23:23] 新增 API Key、发票与故障转移实施契约分析 (新增 .superpowers/sdd/contracts-key-invoice.md)
+[2026-07-27 23:17] 新增 AIHub Desktop 1.1.0 八阶段实施计划，采用测试先行与并行测试契约开发 (新增 docs/superpowers/plans/2026-07-27-desktop-parity-1.1.0.md)
+[2026-07-27 23:12] 新增 AIHub Desktop 1.1.0 用户功能完善设计，明确移除订阅且不增加独立渠道状态与第三方绑定 (新增 docs/superpowers/specs/2026-07-27-desktop-parity-1.1.0-design.md)
+[2026-07-27 20:49] 发布版本升级至 1.0.7，并同步应用内版本与版本契约测试 (更新 package.json、package-lock.json、README.md、src/renderer/app.js 及相关 smoke 测试)
+[2026-07-27 20:49] 使用国内镜像生成 1.0.7 安装包与免安装包 (electron-builder --win --publish never；输出 dist/AIHub-Desktop-1.0.7-Setup.exe 和 dist/AIHub-Desktop-1.0.7.exe)
+[2026-07-27 19:19] 增加故障转移审计日志界面与专项冒烟测试 (更新 src/renderer/app.js、src/renderer/fluent.css、package.json、tools/failover-log-smoke.cjs)
 
 [2026-07-27 08:07] 确认本轮继续使用原 Node/Electron 版本，Go/Wails 重写不在本轮范围 (基线 package.json 版本 1.0.6)
 [2026-07-27 08:07] 完成线上 API 密钥新能力只读核对 (字段 max_rate_multiplier、rate_change_notify_enabled、failover_enabled、failover_strategy=manual|lowest_rate|fastest、failover_group_ids、failover_excluded_group_ids、failover_recovery_mode=sticky|prefer_primary|manual_only)
@@ -10,3 +16,11 @@
 [2026-07-27 08:12] 调整 Git 忽略规则，排除依赖、构建产物、过程文件、测试截图与日志 (更新 .gitignore，保留源码、文档和 work/HISTORY.md)
 [2026-07-27 08:13] 初始化本地 Git main 分支并配置 GitHub 远端与仓库级提交身份 (origin=https://github.com/shiwu-ui/aihub-desktop.git，令牌未持久化)
 [2026-07-27 08:16] 将 Node/Electron 1.0.6 项目源码、文档和换机续接历史上传到 GitHub main 分支 (推送至 shiwu-ui/aihub-desktop，依赖、构建产物、过程文件和敏感凭据未上传)
+[2026-07-27 23:35] 定义桌面端 1.1.0 范围并移除套餐订阅入口 (commit c2f7eea)
+[2026-07-27 23:46] 补充公开站点静态模块契约分析 (更新 .superpowers/sdd/contracts-usage-account.md)
+[2026-07-28 00:41] 创建视觉 QA 执行计划 (新增 .superpowers/sdd/visual-qa-plan.md)
+[2026-07-28 01:39] 完成桌面端 1.1.0 用户功能补齐 (更新 API Key、发票、故障转移、用量、仪表盘、供应商大厅、账户、邀请返利、充值订单与教程)
+[2026-07-28 01:39] 扩展项目测试配置并新增用量与账户专项测试 (更新 package.json，新增 tools/usage-parity-smoke.cjs 和 tools/account-parity-smoke.cjs)
+[2026-07-28 01:39] 限定渲染器仅可连接 GeoJS 地区查询域名 (更新 src/renderer/index.html Content-Security-Policy)
+[2026-07-28 01:55] 运行全部注册测试，17 项全部通过 (逐个执行 package.json 中 test:* 脚本)
+[2026-07-28 01:58] 完成 11 个视图双窗口视觉回归，22 张截图均无页面级溢出 (tools/visual-qa-final.cjs)

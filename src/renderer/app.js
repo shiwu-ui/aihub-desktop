@@ -2183,37 +2183,6 @@ async function handleModalClick(event) {
       await request(`/payment/orders/${state.pendingPaymentOrderId}/cancel`, { method: 'POST' })
       closeModal(); toast('订单已取消'); await navigate('billing')
     }
-    if (action === 'submit-create-key') {
-      const form = $('#create-key-form')
-      if (!form.reportValidity()) return
-      const values = Object.fromEntries(new FormData(form))
-      const groupId = Number(values.group_id) || null
-      const body = {
-        name: values.name.trim(),
-        max_rate_multiplier: Math.max(0, Number(values.max_rate_multiplier || 0)),
-        ...keyFailoverPayload(form, groupId),
-      }
-      if (groupId) body.group_id = groupId
-      if (Number(values.quota) > 0) body.quota = Number(values.quota)
-      if (Number(values.expires_in_days) > 0) body.expires_in_days = Number(values.expires_in_days)
-      setBusy(target, true, '创建中')
-      const key = await request('/keys', { method: 'POST', body })
-      openModal('API Key 已创建', `<div class="secret-output"><span class="muted">请妥善保存</span><code id="created-key">${escapeHTML(key.key)}</code><button class="secondary-button" data-action="copy-created-key"><i data-lucide="copy"></i>复制 Key</button></div><p class="muted" style="font-size:12px;line-height:1.5">关闭后仍可在 Key 列表查看脱敏信息。</p>`, '<button class="primary-button" data-action="finish-create-key">完成</button>')
-    }
-    if (action === 'submit-update-key') {
-      const form = $('#create-key-form')
-      if (!form.reportValidity()) return
-      const data = new FormData(form)
-      const groupId = Number(data.get('group_id')) || null
-      const body = {
-        name: String(data.get('name')).trim(), group_id: groupId, quota: Math.max(0, Number(data.get('quota') || 0)),
-        max_rate_multiplier: Math.max(0, Number(data.get('max_rate_multiplier') || 0)),
-        ...keyFailoverPayload(form, groupId),
-      }
-      setBusy(target, true, '保存中')
-      await request(`/keys/${state.editingKeyId}`, { method: 'PUT', body })
-      closeModal(); toast('API Key 策略已更新'); await navigate('keys')
-    }
     if (action === 'copy-created-key') {
       await window.aihub.copyText($('#created-key').textContent)
       toast('API Key 已复制')
