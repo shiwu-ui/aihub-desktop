@@ -260,6 +260,9 @@ textarea { min-height: 90px; resize: vertical; }
 .filter-panel { display: grid; grid-template-columns: repeat(6,minmax(110px,1fr)); gap: 9px; padding: 13px 15px; border-bottom: 1px solid var(--line); background: var(--surface-muted); }
 .filter-panel label { min-width: 0; }
 .filter-panel input,.filter-panel select { min-height: 34px; font-size: 11px; }
+.log-mode-tabs { grid-column: 1/-1; width: fit-content; }
+.failover-log-table .data-table { min-width: 1120px; }
+.failover-log-table .data-table th,.failover-log-table .data-table td { font-size: 10px; }
 .pagination-bar { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 12px; border-top: 1px solid var(--line); }
 .pagination-bar > span,.pagination-controls strong { color: var(--muted); font-size: 10px; }
 .pagination-controls { display: flex; align-items: center; gap: 4px; }

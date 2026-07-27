@@ -14,7 +14,7 @@ const state = {
   groups: [],
   usagePeriod: 'month',
   dashboardChart: null,
-  logs: { page: 1, pageSize: 20, filters: {} },
+  logs: { page: 1, pageSize: 20, mode: 'usage', filters: {} },
   providerWindow: '6h',
   providerCharts: [],
   announcements: [],
@@ -498,6 +498,35 @@ function queryString(params) {
   return query.toString()
 }
 
+function failoverLabel(value, labels) {
+  return labels[String(value)] || String(value || '-')
+}
+
+function failoverProbeLabel(value) {
+  if (value === true) return '恢复探针'
+  if (value === false) return '常规转移'
+  return String(value || '-')
+}
+
+function failoverRows(items) {
+  const strategyLabels = { manual: '自选分组', lowest_rate: '最低倍率优先', fastest: '最快响应优先' }
+  const recoveryLabels = { sticky: '保持当前', prefer_primary: '积极回主', manual_only: '仅手动切换' }
+  const reasonLabels = { upstream_503: '上游返回 503', timeout: '请求超时', unavailable: '分组不可用' }
+  return items.map((item) => `<tr>
+    <td><div class="cell-title"><strong>${escapeHTML(item.api_key_name || item.api_key?.name || `Key #${item.api_key_id}`)}</strong><span>${escapeHTML(dateTime(item.created_at))}</span></div></td>
+    <td>${escapeHTML(item.model || '-')}</td>
+    <td>${escapeHTML(item.source_group_name || item.source_group?.name || item.source_group_id || '-')}</td>
+    <td>${escapeHTML(item.target_group_name || item.target_group?.name || item.target_group_id || '-')}</td>
+    <td>${number(item.source_multiplier, 2)}</td>
+    <td>${number(item.target_multiplier, 2)}</td>
+    <td>${escapeHTML(failoverLabel(item.strategy, strategyLabels))}</td>
+    <td>${escapeHTML(failoverLabel(item.recovery_mode, recoveryLabels))}</td>
+    <td>${escapeHTML(failoverLabel(item.reason, reasonLabels))}</td>
+    <td>${escapeHTML(failoverProbeLabel(item.health_probe))}</td>
+    <td>${escapeHTML(item.upstream_status_code ?? '-')}</td>
+  </tr>`).join('')
+}
+
 function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`
 }
@@ -535,6 +564,7 @@ async function loadLogsForExport(filters) {
 
 async function renderLogs() {
   const logState = state.logs
+  const isFailover = logState.mode === 'failover'
   if (!state.keys.length) {
     const keyData = await request('/keys?page=1&page_size=100')
     state.keys = paginated(keyData).items
@@ -546,11 +576,11 @@ async function renderLogs() {
   const params = {
     page: logState.page,
     page_size: logState.pageSize,
-    sort_by: 'created_at',
-    sort_order: 'desc',
     ...logState.filters,
   }
-  const logs = paginated(await request(`/usage?${queryString(params)}`))
+  const logs = paginated(await request(isFailover
+    ? `/usage/failovers?${queryString(params)}`
+    : `/usage?${queryString({ ...params, sort_by: 'created_at', sort_order: 'desc' })}`))
   state.currentLogs = logs.items
   const keyOptions = state.keys.map((key) => `<option value="${key.id}" ${String(logState.filters.api_key_id || '') === String(key.id) ? 'selected' : ''}>${escapeHTML(key.name)}</option>`).join('')
   const groupOptions = state.groups.map((group) => `<option value="${group.id}" ${String(logState.filters.group_id || '') === String(group.id) ? 'selected' : ''}>${escapeHTML(group.name)}</option>`).join('')
@@ -567,18 +597,22 @@ async function renderLogs() {
       <td style="width:6%"><i data-lucide="chevron-right" style="width:15px"></i></td>
     </tr>`
   }).join('')
+  const table = isFailover
+    ? (logs.items.length ? `<div class="data-table-wrap failover-log-table"><table class="data-table"><thead><tr><th>API Key / 时间</th><th>模型</th><th>主分组</th><th>备用分组</th><th>主倍率</th><th>备倍率</th><th>策略</th><th>恢复</th><th>原因</th><th>探测</th><th>状态</th></tr></thead><tbody>${failoverRows(logs.items)}</tbody></table></div>` : empty('git-branch', '暂无故障转移记录', '发生分组故障转移后，会在这里保留审计记录。'))
+    : (rows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>时间 / 请求 ID</th><th>模型</th><th>API Key</th><th>分组</th><th>Token</th><th>消费</th><th>耗时</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : empty('list-x', '没有匹配的调用', '调整筛选条件或产生新的 API 请求后再查看。'))
   $('#content').innerHTML = `<div class="page-stack">
-    <div class="page-toolbar"><div class="toolbar-copy"><h2>个人调用记录</h2><p>仅包含你的请求，不含管理员审计与上游账号信息。</p></div><div class="button-row"><button class="secondary-button" data-action="reset-log-filters"><i data-lucide="rotate-ccw"></i>重置</button><button class="primary-button" data-action="export-logs"><i data-lucide="download"></i>导出 CSV</button></div></div>
+    <div class="page-toolbar"><div class="toolbar-copy"><h2>个人调用记录</h2><p>仅包含你的请求，不含管理员审计与上游账号信息。</p></div><div class="button-row"><button class="secondary-button" data-action="reset-log-filters"><i data-lucide="rotate-ccw"></i>重置</button>${isFailover ? '' : '<button class="primary-button" data-action="export-logs"><i data-lucide="download"></i>导出 CSV</button>'}</div></div>
     <section class="panel"><form id="log-filter-form" class="filter-panel">
+      <div class="log-mode-tabs segmented"><button type="button" data-log-mode="usage" class="${isFailover ? '' : 'active'}">调用日志</button><button type="button" data-log-mode="failover" class="${isFailover ? 'active' : ''}">故障转移</button></div>
       <label><span>开始日期</span><input name="start_date" type="date" value="${escapeHTML(logState.filters.start_date || '')}" /></label>
       <label><span>结束日期</span><input name="end_date" type="date" value="${escapeHTML(logState.filters.end_date || '')}" /></label>
       <label><span>API Key</span><select name="api_key_id"><option value="">全部</option>${keyOptions}</select></label>
-      <label><span>分组</span><select name="group_id"><option value="">全部</option>${groupOptions}</select></label>
+      ${isFailover ? '' : `<label><span>分组</span><select name="group_id"><option value="">全部</option>${groupOptions}</select></label>`}
       <label><span>模型</span><input name="model" value="${escapeHTML(logState.filters.model || '')}" placeholder="例如 claude" /></label>
-      <label><span>请求模式</span><select name="stream"><option value="">全部</option><option value="true" ${logState.filters.stream === 'true' ? 'selected' : ''}>流式</option><option value="false" ${logState.filters.stream === 'false' ? 'selected' : ''}>非流式</option></select></label>
+      ${isFailover ? '' : `<label><span>请求模式</span><select name="stream"><option value="">全部</option><option value="true" ${logState.filters.stream === 'true' ? 'selected' : ''}>流式</option><option value="false" ${logState.filters.stream === 'false' ? 'selected' : ''}>非流式</option></select></label>`}
       <div class="button-row" style="grid-column:1/-1;justify-content:flex-end"><button type="submit" class="secondary-button"><i data-lucide="list-filter"></i>应用筛选</button></div>
     </form></section>
-    <section class="panel">${rows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>时间 / 请求 ID</th><th>模型</th><th>API Key</th><th>分组</th><th>Token</th><th>消费</th><th>耗时</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : empty('list-x', '没有匹配的调用', '调整筛选条件或产生新的 API 请求后再查看。')}
+    <section class="panel">${table}
       <div class="pagination-bar"><span>共 ${number(logs.total)} 条 · 每页 ${number(logState.pageSize)} 条</span><div class="pagination-controls"><button class="icon-button toolbar-button" data-action="logs-prev" ${logState.page <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button><strong>${number(logState.page)} / ${number(logs.pages || 1)}</strong><button class="icon-button toolbar-button" data-action="logs-next" ${logState.page >= (logs.pages || 1) ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button></div></div>
     </section>
   </div>`
@@ -1278,7 +1312,7 @@ function confirmModal(title, message, confirmAction, danger = false) {
 }
 
 async function handleContentClick(event) {
-  const target = event.target.closest('[data-action], [data-route-jump], [data-period-value], [data-provider-tab], [data-provider-window], [data-client-tab]')
+  const target = event.target.closest('[data-action], [data-route-jump], [data-period-value], [data-provider-tab], [data-provider-window], [data-client-tab], [data-log-mode]')
   if (!target) return
   if (target.dataset.routeJump) return navigate(target.dataset.routeJump)
   if (target.dataset.periodValue) {
@@ -1293,6 +1327,10 @@ async function handleContentClick(event) {
     state.clientId = target.dataset.clientTab
     $$('.client-tabs button').forEach((button) => button.classList.toggle('active', button === target))
     return renderClients()
+  }
+  if (target.dataset.logMode) {
+    state.logs = { ...state.logs, mode: target.dataset.logMode, page: 1, filters: {} }
+    return renderLogs()
   }
   const action = target.dataset.action
   if (action === 'retry') return navigate(state.route)
