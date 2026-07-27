@@ -1,5 +1,6 @@
 'use strict'
 
+const assert = require('node:assert/strict')
 const { _electron: electron } = require('playwright-core')
 const fs = require('node:fs/promises')
 const os = require('node:os')
@@ -30,8 +31,10 @@ async function run() {
       ]
       const key = {
         id: 7, name: 'Codex Key', key: 'sk-mocked-feature', status: 'active', group_id: 1, group: groups[0],
-        quota: 0, quota_used: 0, max_rate_multiplier: 0.02, failover_enabled: true,
-        failover_strategy: 'manual', failover_group_ids: [3], last_used_at: '2026-07-19T01:00:00Z',
+        quota: 0, quota_used: 0, max_rate_multiplier: 0.02, rate_change_notify_enabled: true,
+        failover_enabled: true, failover_strategy: 'fastest', failover_group_ids: [3, 2],
+        failover_excluded_group_ids: [3], failover_recovery_mode: 'prefer_primary',
+        last_used_at: '2026-07-19T01:00:00Z',
       }
       request = async (route, options = {}) => {
         window.__featureCalls.push({ route, method: options.method || 'GET', body: options.body })
@@ -66,7 +69,47 @@ async function run() {
     await page.waitForSelector('#create-key-form')
     if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'key-policy-editor.png') })
     const initialMaxRate = await page.inputValue('[name="max_rate_multiplier"]')
-    await page.click('.failover-strategy-segments label:has([value="lowest_rate"])')
+    const initialPolicy = await page.evaluate(() => {
+      const form = document.querySelector('#create-key-form')
+      const values = (name) => [...form.querySelectorAll(`[name="${name}"]`)].map((input) => input.value)
+      const selected = (name) => form.querySelector(`[name="${name}"]:checked`)?.value || null
+      const checkedValues = (name) => [...new FormData(form).getAll(name)].map(String)
+      return {
+        rateChangeNotifyEnabled: form.elements.rate_change_notify_enabled?.checked ?? null,
+        failoverStrategies: values('failover_strategy'),
+        selectedFailoverStrategy: selected('failover_strategy'),
+        orderedFailoverGroupIds: checkedValues('failover_group_ids'),
+        excludedFailoverGroupIds: checkedValues('failover_excluded_group_ids'),
+        recoveryModes: values('failover_recovery_mode'),
+        selectedRecoveryMode: selected('failover_recovery_mode'),
+      }
+    })
+    assert.deepEqual(initialPolicy, {
+      rateChangeNotifyEnabled: true,
+      failoverStrategies: ['manual', 'lowest_rate', 'fastest'],
+      selectedFailoverStrategy: 'fastest',
+      orderedFailoverGroupIds: ['3', '2'],
+      excludedFailoverGroupIds: ['3'],
+      recoveryModes: ['sticky', 'prefer_primary', 'manual_only'],
+      selectedRecoveryMode: 'prefer_primary',
+    }, 'key editor must hydrate the complete site policy contract')
+
+    await page.click('[name="rate_change_notify_enabled"]')
+    await page.click('[name="rate_change_notify_enabled"]')
+    const strategySequence = []
+    for (const strategy of ['manual', 'lowest_rate', 'fastest']) {
+      await page.click(`.failover-strategy-segments label:has([value="${strategy}"])`)
+      strategySequence.push(await page.inputValue('[name="failover_strategy"]:checked'))
+    }
+    const orderedCandidates = await page.evaluate(() => new FormData(document.querySelector('#create-key-form')).getAll('failover_group_ids').map(String))
+    const recoverySequence = []
+    for (const mode of ['sticky', 'manual_only', 'prefer_primary']) {
+      await page.click(`[name="failover_recovery_mode"][value="${mode}"]`)
+      recoverySequence.push(await page.inputValue('[name="failover_recovery_mode"]:checked'))
+    }
+    assert.deepEqual(strategySequence, ['manual', 'lowest_rate', 'fastest'])
+    assert.deepEqual(orderedCandidates, ['3', '2'])
+    assert.deepEqual(recoverySequence, ['sticky', 'manual_only', 'prefer_primary'])
     await page.fill('[name="max_rate_multiplier"]', '0.03')
     await page.click('[data-action="submit-update-key"]')
     await page.waitForSelector('#modal-root .modal', { state: 'detached' })
@@ -74,7 +117,19 @@ async function run() {
     const groupCall = calls.find((call) => call.route === '/keys/7/group' && call.method === 'PUT')
     const updateCall = calls.find((call) => call.route === '/keys/7' && call.method === 'PUT')
     const hasAdminCall = calls.some((call) => call.route.startsWith('/admin'))
-    if (cacheText !== '样本不足' || initialMaxRate !== '0.02' || groupCall?.body?.group_id !== 2 || updateCall?.body?.max_rate_multiplier !== 0.03 || updateCall?.body?.failover_strategy !== 'lowest_rate' || updateCall?.body?.failover_enabled !== true || updateCall?.body?.failover_group_ids?.length !== 0 || hasAdminCall || errors.length) {
+    assert.deepEqual(updateCall?.body, {
+      name: 'Codex Key',
+      group_id: 1,
+      quota: 0,
+      max_rate_multiplier: 0.03,
+      rate_change_notify_enabled: true,
+      failover_enabled: true,
+      failover_strategy: 'fastest',
+      failover_group_ids: [],
+      failover_excluded_group_ids: [3],
+      failover_recovery_mode: 'prefer_primary',
+    }, 'PUT /keys/7 must persist the complete key policy')
+    if (cacheText !== '样本不足' || initialMaxRate !== '0.02' || groupCall?.body?.group_id !== 2 || hasAdminCall || errors.length) {
       throw new Error(JSON.stringify({ cacheText, initialMaxRate, groupCall, updateCall, hasAdminCall, errors }))
     }
     console.log(JSON.stringify({ ok: true, cacheHitRate: true, existingKeySwitch: true, maxRate: true, failover: true, noAdminRoutes: true }))

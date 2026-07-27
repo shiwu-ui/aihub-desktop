@@ -1127,13 +1127,23 @@ function keyGroupRate(group) {
 }
 
 function keyPolicyFields(key = {}) {
-  const selectedFailover = new Set((key.failover_group_ids || []).map(String))
-  const groupChecks = state.groups.map((group) => `<label class="failover-group-option"><input type="checkbox" name="failover_group_ids" value="${escapeHTML(group.id)}" ${selectedFailover.has(String(group.id)) ? 'checked' : ''} /><span><strong>${escapeHTML(group.name)}</strong><small>${number(keyGroupRate(group), 2)}x</small></span></label>`).join('')
+  const selectedFailover = (key.failover_group_ids || []).map(String)
+  const selectedExcluded = new Set((key.failover_excluded_group_ids || []).map(String))
+  const selectedGroups = new Set(selectedFailover)
+  const orderedGroups = [
+    ...selectedFailover.map((id) => state.groups.find((group) => String(group.id) === id)).filter(Boolean),
+    ...state.groups.filter((group) => !selectedGroups.has(String(group.id))),
+  ]
+  const groupChecks = orderedGroups.map((group) => `<label class="failover-group-option"><input type="checkbox" name="failover_group_ids" value="${escapeHTML(group.id)}" ${selectedGroups.has(String(group.id)) ? 'checked' : ''} /><span><strong>${escapeHTML(group.name)}</strong><small>${number(keyGroupRate(group), 2)}x</small></span></label>`).join('')
+  const excludedChecks = state.groups.map((group) => `<label class="failover-group-option"><input type="checkbox" name="failover_excluded_group_ids" value="${escapeHTML(group.id)}" ${selectedExcluded.has(String(group.id)) ? 'checked' : ''} /><span><strong>${escapeHTML(group.name)}</strong><small>${number(keyGroupRate(group), 2)}x</small></span></label>`).join('')
   return `<label><span>最大倍率（0 = 不限制）</span><input name="max_rate_multiplier" type="number" min="0" step="0.01" value="${escapeHTML(key.max_rate_multiplier ?? 0)}" placeholder="0 = 不限制" /><small>设置为 0 时不限制倍率；填写大于 0 的上限后，分组倍率超过该值时 Key 才会停止调用并返回错误。</small></label>
+    <label class="key-policy-toggle"><input name="rate_change_notify_enabled" type="checkbox" ${key.rate_change_notify_enabled ? 'checked' : ''} /><span><strong>倍率变动通知</strong><small>分组倍率变化时，由 AIHub 官方接口发送通知</small></span></label>
     <label class="span-two key-policy-toggle"><input name="failover_enabled" type="checkbox" ${key.failover_enabled ? 'checked' : ''} /><span><strong>启用故障转移</strong><small>策略提交到 AIHub 官方接口，由网站服务端在当前分组不可用时执行</small></span></label>
     <div id="key-failover-options" class="span-two key-failover-options">
-      <div class="failover-strategy-row"><span class="field-label">转移策略</span><div class="failover-strategy-segments"><label><input type="radio" name="failover_strategy" value="manual" ${key.failover_strategy !== 'lowest_rate' ? 'checked' : ''} /><span><strong>自选分组</strong><small>仅在指定分组中转移</small></span></label><label><input type="radio" name="failover_strategy" value="lowest_rate" ${key.failover_strategy === 'lowest_rate' ? 'checked' : ''} /><span><strong>最低倍率</strong><small>自动选择倍率最低的可用组</small></span></label></div></div>
+      <div class="failover-strategy-row"><span class="field-label">转移策略</span><div class="failover-strategy-segments"><label><input type="radio" name="failover_strategy" value="manual" ${!['lowest_rate', 'fastest'].includes(key.failover_strategy) ? 'checked' : ''} /><span><strong>自选分组</strong><small>仅在指定分组中转移</small></span></label><label><input type="radio" name="failover_strategy" value="lowest_rate" ${key.failover_strategy === 'lowest_rate' ? 'checked' : ''} /><span><strong>最低倍率</strong><small>自动选择倍率最低的可用组</small></span></label><label><input type="radio" name="failover_strategy" value="fastest" ${key.failover_strategy === 'fastest' ? 'checked' : ''} /><span><strong>最快响应</strong><small>自动选择最快的可用组</small></span></label></div></div>
       <div id="manual-failover-groups"><div class="failover-groups-heading"><span class="field-label">备用分组</span><small>主分组自动排除；按列表顺序尝试</small></div><div class="failover-group-grid">${groupChecks}</div></div>
+      <div id="automatic-failover-exclusions"><div class="failover-groups-heading"><span class="field-label">排除分组</span><small>自动策略不会选择这些分组</small></div><div class="failover-group-grid">${excludedChecks}</div></div>
+      <div class="failover-strategy-row"><span class="field-label">恢复主分组</span><div class="failover-recovery-segments"><label><input type="radio" name="failover_recovery_mode" value="sticky" ${key.failover_recovery_mode !== 'prefer_primary' && key.failover_recovery_mode !== 'manual_only' ? 'checked' : ''} /><span><strong>保持当前</strong><small>恢复后继续使用当前组</small></span></label><label><input type="radio" name="failover_recovery_mode" value="prefer_primary" ${key.failover_recovery_mode === 'prefer_primary' ? 'checked' : ''} /><span><strong>优先主组</strong><small>主组恢复后优先切回</small></span></label><label><input type="radio" name="failover_recovery_mode" value="manual_only" ${key.failover_recovery_mode === 'manual_only' ? 'checked' : ''} /><span><strong>仅手动</strong><small>仅在手动策略中切换</small></span></label></div></div>
     </div>`
 }
 
@@ -1143,7 +1153,7 @@ function syncKeyPolicyForm() {
   const enabled = form.elements.failover_enabled.checked
   const strategy = form.elements.failover_strategy.value
   const primaryGroupId = String(form.elements.group_id.value || '')
-  $$('[name="failover_group_ids"]', form).forEach((input) => {
+  $$('[name="failover_group_ids"], [name="failover_excluded_group_ids"]', form).forEach((input) => {
     const isPrimary = Boolean(primaryGroupId) && input.value === primaryGroupId
     input.disabled = isPrimary
     if (isPrimary) input.checked = false
@@ -1151,6 +1161,7 @@ function syncKeyPolicyForm() {
   })
   $('#key-failover-options')?.classList.toggle('hidden', !enabled)
   $('#manual-failover-groups')?.classList.toggle('hidden', !enabled || strategy !== 'manual')
+  $('#automatic-failover-exclusions')?.classList.toggle('hidden', !enabled || strategy === 'manual')
 }
 
 function keyFailoverPayload(form, primaryGroupId) {
@@ -1158,11 +1169,16 @@ function keyFailoverPayload(form, primaryGroupId) {
   const strategy = form.elements.failover_strategy.value || 'manual'
   // The desktop app only persists the policy; AIHub executes failover server-side.
   return {
+    rate_change_notify_enabled: Boolean(form.elements.rate_change_notify_enabled?.checked),
     failover_enabled: enabled,
     failover_strategy: strategy,
     failover_group_ids: enabled && strategy === 'manual'
       ? new FormData(form).getAll('failover_group_ids').map(Number).filter((id) => id > 0 && id !== primaryGroupId)
       : [],
+    failover_excluded_group_ids: enabled && strategy !== 'manual'
+      ? new FormData(form).getAll('failover_excluded_group_ids').map(Number).filter((id) => id > 0 && id !== primaryGroupId)
+      : [],
+    failover_recovery_mode: form.elements.failover_recovery_mode.value || 'sticky',
   }
 }
 
