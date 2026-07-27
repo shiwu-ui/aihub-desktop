@@ -9,3 +9,4 @@
 [2026-07-27 08:09] 换机续接摘要：继续使用原 Node/Electron 1.0.6，待补齐密钥最高倍率、倍率邮件通知、三种故障转移策略及排除/候选分组、三种回切、故障转移日志、自助发票，并将软件教程整体替换为站点 /tutorial (当前无业务代码改动，先完成设计确认)
 [2026-07-27 08:12] 调整 Git 忽略规则，排除依赖、构建产物、过程文件、测试截图与日志 (更新 .gitignore，保留源码、文档和 work/HISTORY.md)
 [2026-07-27 08:13] 初始化本地 Git main 分支并配置 GitHub 远端与仓库级提交身份 (origin=https://github.com/shiwu-ui/aihub-desktop.git，令牌未持久化)
+[2026-07-27 08:16] 将 Node/Electron 1.0.6 项目源码、文档和换机续接历史上传到 GitHub main 分支 (推送至 shiwu-ui/aihub-desktop，依赖、构建产物、过程文件和敏感凭据未上传)
