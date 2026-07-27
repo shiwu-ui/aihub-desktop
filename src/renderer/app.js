@@ -1383,28 +1383,93 @@ async function finishActivePayment(order) {
 async function renderAffiliate() {
   const aff = await request('/user/aff')
   const invitees = aff?.invitees || []
-  const rows = invitees.map((item) => `<tr><td><div class="cell-title"><strong>${escapeHTML(item.username || '用户')}</strong><span>${escapeHTML(item.email || '')}</span></div></td><td>${money(item.total_rebate)}</td><td>${escapeHTML(dateTime(item.created_at))}</td></tr>`).join('')
-  $('#content').innerHTML = `<div class="page-stack">
+  const knownInviteeFields = new Set(['user_id', 'username', 'email', 'total_rebate', 'created_at'])
+  const rows = invitees.map((item) => {
+    const breakdown = Object.entries(item).filter(([field]) => !knownInviteeFields.has(field)).map(([field, value]) => `<span><code>${escapeHTML(field)}</code>: ${escapeHTML(value)}</span>`).join('')
+    return `<tr><td><div class="cell-title"><strong>${escapeHTML(item.username || '用户')}</strong><span>${escapeHTML(item.email || '')}</span></div></td><td><div class="cell-title"><strong>${money(item.total_rebate)}</strong>${breakdown}</div></td><td>${escapeHTML(dateTime(item.created_at))}</td></tr>`
+  }).join('')
+  const inviteCode = String(aff.aff_code || '')
+  const inviteLink = `https://aihub.top/register?aff=${encodeURIComponent(inviteCode)}`
+  $('#content').innerHTML = `<div class="page-stack affiliate-page">
     <div class="metrics-grid">
       ${metric('已邀请', number(aff.aff_count), '成功注册用户', 'users-round', 'green')}
       ${metric('可转余额', money(aff.aff_quota), '可转入账户余额', 'coins')}
       ${metric('累计返利', money(aff.aff_history_quota), '历史总额', 'chart-spline', 'amber')}
+      ${metric('冻结返利', money(aff.aff_frozen_quota), '等待结算', 'snowflake', 'blue')}
       ${metric('返利比例', `${number(aff.effective_rebate_rate_percent, 2)}%`, '当前有效比例', 'percent', 'dark')}
     </div>
-    <section class="panel"><div class="panel-header"><div><h2>邀请链接</h2><p>分享给需要 AI API 的朋友</p></div></div><div class="panel-body"><div class="inline-form"><input id="affiliate-link" readonly value="${escapeHTML(`https://aihub.top/register?aff=${aff.aff_code || ''}`)}" /><button class="secondary-button" data-action="copy-affiliate"><i data-lucide="copy"></i>复制</button>${Number(aff.aff_quota || 0) > 0 ? '<button class="primary-button" data-action="transfer-affiliate"><i data-lucide="arrow-right-left"></i>转入余额</button>' : ''}</div></div></section>
+    <section class="panel"><div class="panel-header"><div><h2>邀请信息</h2><p>分享给需要 AI API 的朋友</p></div></div><div class="panel-body affiliate-copy-grid"><label><span>邀请码</span><div class="inline-form"><input id="affiliate-code" readonly value="${escapeHTML(inviteCode)}" /><button class="secondary-button" data-action="copy-affiliate-code"><i data-lucide="copy"></i>复制邀请码</button></div></label><label><span>邀请链接</span><div class="inline-form"><input id="affiliate-link" readonly value="${escapeHTML(inviteLink)}" /><button class="secondary-button" data-action="copy-affiliate-link"><i data-lucide="copy"></i>复制链接</button></div></label>${Number(aff.aff_quota || 0) > 0 ? '<button class="primary-button" data-action="transfer-affiliate"><i data-lucide="arrow-right-left"></i>转入余额</button>' : ''}</div></section>
     <section class="panel"><div class="panel-header"><div><h2>邀请记录</h2><p>${number(invitees.length)} 位用户</p></div></div>${rows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>用户</th><th>贡献返利</th><th>注册时间</th></tr></thead><tbody>${rows}</tbody></table></div>` : empty('user-plus', '还没有邀请记录', '复制邀请链接分享后，成功注册的用户会显示在这里。')}</section>
   </div>`
   icons($('#content'))
 }
 
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('无法读取头像文件'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function imageFromURL(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('头像图片无效'))
+    image.src = url
+  })
+}
+
+function canvasBlob(canvas, quality) {
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', quality))
+}
+
+async function compressAvatar(file, maxBytes = 20480) {
+  if (!file || !String(file.type || '').startsWith('image/')) throw new Error('请选择图片文件')
+  if (file.type === 'image/gif') {
+    if (file.size > maxBytes) throw new Error('GIF 头像不能超过 20KB')
+    return readFileAsDataURL(file)
+  }
+  if (file.size <= maxBytes) return readFileAsDataURL(file)
+  const source = await readFileAsDataURL(file)
+  const image = await imageFromURL(source)
+  const scales = [1, .92, .84, .76, .68, .6, .52, .44, .36]
+  const qualities = [.92, .84, .76, .68, .6, .52, .44, .36]
+  for (const scale of scales) {
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height)
+    for (const quality of qualities) {
+      const blob = await canvasBlob(canvas, quality)
+      if (blob && blob.size <= maxBytes) return readFileAsDataURL(new File([blob], 'avatar.webp', { type: 'image/webp' }))
+    }
+  }
+  throw new Error('头像压缩后仍超过 20KB')
+}
+
+function applyProfile(profile) {
+  state.user = profile
+  const name = profile?.username || profile?.email || '账户'
+  $('#account-name').textContent = name
+  const avatar = $('#account-avatar')
+  avatar.textContent = name.slice(0, 1).toUpperCase()
+  avatar.style.backgroundImage = profile?.avatar_url ? `url("${String(profile.avatar_url).replaceAll('"', '%22')}")` : ''
+  avatar.classList.toggle('has-image', Boolean(profile?.avatar_url))
+}
+
 async function renderAccount() {
   const profile = await request('/user/profile')
-  state.user = profile
-  $('#content').innerHTML = `<div class="page-stack">
+  applyProfile(profile)
+  const extraEmails = (profile.balance_notify_extra_emails || []).map((item) => typeof item === 'string' ? { email: item, disabled: false } : item)
+  const extraRows = extraEmails.map((item) => `<div class="notification-email-row"><strong>${escapeHTML(item.email)}</strong><span class="status-badge ${item.disabled ? 'inactive' : 'active'}">${item.disabled ? '已停用' : '启用中'}</span><button class="icon-button" data-action="toggle-extra-email" data-email="${escapeHTML(item.email)}" data-disabled="${item.disabled ? 'false' : 'true'}" title="切换状态"><i data-lucide="power"></i></button><button class="icon-button" data-action="delete-extra-email" data-email="${escapeHTML(item.email)}" title="删除"><i data-lucide="trash-2"></i></button></div>`).join('')
+  $('#content').innerHTML = `<div class="page-stack account-page">
     <div class="two-column">
       <section class="panel"><div class="panel-header"><div><h2>个人资料</h2><p>账户公开信息</p></div></div><div class="panel-body"><form id="profile-form" class="form-grid">
+        <div class="span-two account-avatar-editor"><div class="account-avatar-preview">${profile.avatar_url ? `<img src="${escapeHTML(profile.avatar_url)}" alt="头像" />` : escapeHTML((profile.username || profile.email || 'A').slice(0, 1).toUpperCase())}</div><div class="button-row"><label class="secondary-button" for="account-avatar-input"><i data-lucide="upload"></i>上传头像</label><input id="account-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden /><button type="button" class="secondary-button" data-action="remove-avatar"><i data-lucide="trash-2"></i>移除</button></div></div>
         <label class="span-two"><span>用户名</span><input name="username" value="${escapeHTML(profile.username || '')}" required /></label>
-        <label class="span-two"><span>邮箱</span><input value="${escapeHTML(profile.email || '')}" disabled /></label>
         <label><span>账户状态</span><input value="${escapeHTML(profile.status || '')}" disabled /></label>
         <label><span>并发额度</span><input value="${number(profile.concurrency)}" disabled /></label>
         <div class="span-two button-row"><button type="submit" class="primary-button"><i data-lucide="save"></i>保存资料</button></div>
@@ -1417,6 +1482,11 @@ async function renderAccount() {
         <div class="detail-row"><span>最近活跃</span><strong>${escapeHTML(dateTime(profile.last_active_at))}</strong></div>
       </div></section>
     </div>
+    <section class="two-column account-tools-grid">
+      <section class="panel"><div class="panel-header"><div><h2>主邮箱</h2><p>验证码与密码确认</p></div></div><div class="panel-body"><form id="primary-email-form" class="form-grid"><label class="span-two"><span>邮箱</span><input name="email" type="email" value="${escapeHTML(profile.email || '')}" required /></label><label><span>验证码</span><input name="verify_code" minlength="6" maxlength="6" required /></label><label><span>当前密码</span><input name="password" type="password" required /></label><div class="span-two button-row"><button type="button" class="secondary-button" data-action="send-primary-email-code">发送验证码</button><button type="submit" class="primary-button">更新邮箱</button></div></form></div></section>
+      <section class="panel"><div class="panel-header"><div><h2>余额提醒</h2><p>低余额邮件通知</p></div></div><div class="panel-body"><form id="balance-notify-form" class="form-grid"><div class="span-two key-policy-toggle"><span><strong>低余额通知</strong><small>${profile.balance_notify_enabled ? '已启用' : '已停用'}</small></span><button type="button" class="secondary-button" data-action="toggle-balance-notify">${profile.balance_notify_enabled ? '停用' : '启用'}</button></div><label class="span-two"><span>提醒阈值</span><input name="threshold" type="number" min="0" step="0.01" value="${escapeHTML(profile.balance_notify_threshold ?? 0)}" /></label><div class="span-two button-row"><button type="submit" class="primary-button">保存阈值</button></div></form></div></section>
+    </section>
+    <section class="panel"><div class="panel-header"><div><h2>额外通知邮箱</h2><p>最多三个地址</p></div></div><div class="panel-body"><form id="extra-email-form" class="inline-form"><input name="email" type="email" placeholder="通知邮箱" required /><input name="code" minlength="6" maxlength="6" placeholder="验证码" required /><button type="button" class="secondary-button" data-action="send-extra-email-code">发送验证码</button><button type="submit" class="primary-button">验证并添加</button></form><div class="notification-email-list">${extraRows || '<span class="muted">暂无额外通知邮箱</span>'}</div></div></section>
     <section class="panel"><div class="panel-header"><div><h2>安全设置</h2><p>修改密码或撤销其他设备会话</p></div></div><div class="panel-body"><form id="password-form" class="form-grid">
       <label><span>当前密码</span><input name="old_password" type="password" autocomplete="current-password" required /></label>
       <label><span>新密码</span><input name="new_password" type="password" minlength="8" autocomplete="new-password" required /></label>
@@ -1970,9 +2040,39 @@ async function handleContentClick(event) {
     state.pendingKeyId = target.dataset.id
     confirmModal('删除 API Key', '删除后使用该 Key 的客户端将立即无法调用，且操作不可恢复。', 'confirm-delete-key', true)
   }
-  if (action === 'copy-affiliate') {
-    await window.aihub.copyText($('#affiliate-link').value)
-    toast('邀请链接已复制')
+  if (action === 'copy-affiliate-code') { await window.aihub.copyText($('#affiliate-code').value); toast('邀请码已复制') }
+  if (action === 'copy-affiliate-link') { await window.aihub.copyText($('#affiliate-link').value); toast('邀请链接已复制') }
+  if (action === 'remove-avatar') {
+    const profile = await request('/user', { method: 'PUT', body: { avatar_url: '' } })
+    applyProfile(profile)
+    return renderAccount()
+  }
+  if (action === 'send-primary-email-code') {
+    const email = String(new FormData($('#primary-email-form')).get('email') || '').trim()
+    if (!email) throw new Error('请输入邮箱')
+    await request('/user/account-bindings/email/send-code', { method: 'POST', body: { email } })
+    toast('验证码已发送')
+    return
+  }
+  if (action === 'toggle-balance-notify') {
+    const profile = await request('/user', { method: 'PUT', body: { balance_notify_enabled: !Boolean(state.user?.balance_notify_enabled) } })
+    applyProfile(profile)
+    return renderAccount()
+  }
+  if (action === 'send-extra-email-code') {
+    const email = String(new FormData($('#extra-email-form')).get('email') || '').trim()
+    if (!email) throw new Error('请输入通知邮箱')
+    await request('/user/notify-email/send-code', { method: 'POST', body: { email } })
+    toast('验证码已发送')
+    return
+  }
+  if (action === 'toggle-extra-email') {
+    await request('/user/notify-email/toggle', { method: 'PUT', body: { email: target.dataset.email, disabled: target.dataset.disabled === 'true' } })
+    return renderAccount()
+  }
+  if (action === 'delete-extra-email') {
+    await request('/user/notify-email', { method: 'DELETE', body: { email: target.dataset.email } })
+    return renderAccount()
   }
   if (action === 'transfer-affiliate') {
     confirmModal('转入账户余额', '将当前可用返利全部转入账户余额？', 'confirm-transfer-affiliate')
@@ -2237,6 +2337,31 @@ async function handleContentSubmit(event) {
       const profile = await request('/user', { method: 'PUT', body: { username } })
       state.user = profile; toast('资料已保存'); navigate('account')
     }
+    if (form.id === 'primary-email-form') {
+      const data = new FormData(form)
+      await request('/user/account-bindings/email', { method: 'POST', body: { email: String(data.get('email') || '').trim(), verify_code: String(data.get('verify_code') || '').trim(), password: String(data.get('password') || '') } })
+      form.reset()
+      toast('主邮箱已更新')
+      await renderAccount()
+      return
+    }
+    if (form.id === 'balance-notify-form') {
+      const threshold = Number(new FormData(form).get('threshold') || 0)
+      if (!Number.isFinite(threshold) || threshold < 0) throw new Error('请输入有效的提醒阈值')
+      const profile = await request('/user', { method: 'PUT', body: { balance_notify_threshold: threshold } })
+      applyProfile(profile)
+      toast('提醒阈值已保存')
+      await renderAccount()
+      return
+    }
+    if (form.id === 'extra-email-form') {
+      const data = new FormData(form)
+      await request('/user/notify-email/verify', { method: 'POST', body: { email: String(data.get('email') || '').trim(), code: String(data.get('code') || '').trim() } })
+      form.reset()
+      toast('通知邮箱已添加')
+      await renderAccount()
+      return
+    }
     if (form.id === 'password-form') {
       const values = Object.fromEntries(new FormData(form))
       await request('/user/password', { method: 'PUT', body: values })
@@ -2246,6 +2371,22 @@ async function handleContentSubmit(event) {
     toast(error.message, 'error')
   } finally {
     setBusy(button, false)
+  }
+}
+
+async function handleContentChange(event) {
+  if (event.target.id !== 'account-avatar-input') return
+  const file = event.target.files?.[0]
+  if (!file) return
+  try {
+    const avatarUrl = await compressAvatar(file)
+    const profile = await request('/user', { method: 'PUT', body: { avatar_url: avatarUrl } })
+    applyProfile(profile)
+    toast('头像已更新')
+    await renderAccount()
+  } catch (error) {
+    toast(error.message, 'error')
+    event.target.value = ''
   }
 }
 
@@ -2289,6 +2430,7 @@ $('#sidebar-nav').addEventListener('click', (event) => {
 })
 $('#content').addEventListener('click', handleContentClick)
 $('#content').addEventListener('submit', handleContentSubmit)
+$('#content').addEventListener('change', handleContentChange)
 $('#content').addEventListener('input', (event) => {
   if (event.target.id === 'recharge-amount') updateRechargePreview()
 })
