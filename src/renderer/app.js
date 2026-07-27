@@ -29,6 +29,10 @@ const state = {
   logs: { page: 1, pageSize: 20, mode: 'usage', filters: {} },
   invoices: { eligiblePage: 1, applicationsPage: 1, pageSize: 20, eligibleOrders: [] },
   providerWindow: '6h',
+  providerSort: 'availability',
+  providerMetric: 'first_token',
+  providerSummary: null,
+  providerSeries: Object.create(null),
   providerCharts: [],
   announcements: [],
   preferredGroupId: null,
@@ -427,6 +431,11 @@ async function renderDashboard() {
   $('#account-avatar').textContent = name.slice(0, 1).toUpperCase()
   const noticeItems = paginated(announcements).items
   state.announcements = noticeItems
+  const range = { start_date: snapshot?.start_date || '', end_date: snapshot?.end_date || '' }
+  const [modelsResult, recentResult] = await Promise.allSettled([
+    request(`/usage/dashboard/models?${queryString(range)}`),
+    request(`/usage?${queryString({ ...range, page: 1, page_size: 100, sort_by: 'created_at', sort_order: 'desc' })}`),
+  ])
   const trend = snapshot?.trend || []
   const chartPoints = trend.slice(-30)
   const periodCost = chartPoints.reduce((sum, item) => sum + Number(item.actual_cost ?? item.cost ?? 0), 0)
@@ -437,6 +446,10 @@ async function renderDashboard() {
   const notices = noticeItems.length
     ? noticeItems.slice(0, 5).map((item) => `<button class="announcement-row" data-action="announcement-detail" data-id="${escapeHTML(item.id)}"><span class="announcement-copy"><span class="announcement-title">${item.read_at ? '' : '<i class="announcement-unread" aria-label="未读"></i>'}<strong>${escapeHTML(item.title)}</strong></span><span>${escapeHTML(markdownPreview(item.content))}</span></span><time>${escapeHTML(shortDate(item.created_at))}</time><i data-lucide="chevron-right"></i></button>`).join('')
     : empty('bell-off', '暂无公告', '站点公告会显示在这里。')
+  const platformRows = (stats.by_platform || []).map((item) => `<div class="dashboard-breakdown-row"><strong>${escapeHTML(item.platform || '-')}</strong><span>${money(item.total_actual_cost)}</span><span>${number(item.total_requests)} 次</span><span>${compactNumber(item.total_tokens)} Token</span></div>`).join('')
+  const modelRows = modelsResult.status === 'fulfilled' ? (modelsResult.value?.models || modelsResult.value?.items || []).slice(0, 8).map((item) => `<div class="dashboard-breakdown-row"><strong>${escapeHTML(item.model || '-')}</strong><span>${money(item.actual_cost ?? item.total_actual_cost)}</span><span>${number(item.requests ?? item.total_requests)} 次</span><span>${compactNumber(item.total_tokens)} Token</span></div>`).join('') : ''
+  const recentRows = recentResult.status === 'fulfilled' ? paginated(recentResult.value).items.slice(0, 5).map((item) => `<div class="dashboard-recent-row"><strong>${escapeHTML(item.model || '-')}</strong><span>${number(Number(item.input_tokens || 0) + Number(item.output_tokens || 0))} Token</span><span>${money(item.actual_cost)}</span><time>${escapeHTML(dateTime(item.created_at))}</time></div>`).join('') : ''
+  const localUnavailable = (message) => `<div class="usage-section-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(message || '暂不可用')}</span></div>`
 
   $('#content').innerHTML = `<div class="page-stack">
     <div class="metrics-grid">
@@ -462,6 +475,12 @@ async function renderDashboard() {
       </div>
     </section>
     <div class="dashboard-grid single-dashboard-panel"><section class="panel"><div class="panel-header"><div><h2>消费趋势</h2><p>${escapeHTML(snapshot?.start_date || '')} 至 ${escapeHTML(snapshot?.end_date || '')}</p></div><button class="icon-button" data-route-jump="usage" title="查看用量"><i data-lucide="arrow-up-right"></i></button></div><div class="panel-body">${chartBody}</div></section></div>
+    <section class="dashboard-parity-grid">
+      <section class="panel"><div class="panel-header"><h2>按平台拆分</h2></div><div class="panel-body dashboard-breakdown">${platformRows || '<span class="muted">暂无平台数据</span>'}</div></section>
+      <section class="panel"><div class="panel-header"><h2>模型分布</h2></div><div class="panel-body dashboard-breakdown">${modelsResult.status === 'fulfilled' ? (modelRows || '<span class="muted">暂无模型数据</span>') : localUnavailable(modelsResult.reason?.message)}</div></section>
+      <section class="panel"><div class="panel-header"><h2>最近使用</h2></div><div class="panel-body dashboard-breakdown">${recentResult.status === 'fulfilled' ? (recentRows || '<span class="muted">暂无使用记录</span>') : localUnavailable(recentResult.reason?.message)}</div></section>
+    </section>
+    <section class="panel dashboard-quick-actions"><div class="panel-header"><h2>快捷操作</h2></div><div class="panel-body"><button class="secondary-button" data-dashboard-route="keys"><i data-lucide="key-round"></i>创建 API Key</button><button class="secondary-button" data-dashboard-route="usage"><i data-lucide="chart-no-axes-combined"></i>查看用量</button><button class="secondary-button" data-dashboard-route="failover"><i data-lucide="git-branch"></i>故障转移日志</button><button class="secondary-button" data-dashboard-route="redeem"><i data-lucide="ticket-check"></i>兑换码</button></div></section>
     <section class="panel"><div class="panel-header"><div><h2>站点公告</h2><p>来自 AIHub 的最新消息</p></div></div><div class="panel-body announcement-list">${notices}</div></section>
   </div>`
   icons($('#content'))
@@ -797,9 +816,38 @@ function providerStateLabel(item) {
   return ['operational', '可用']
 }
 
-function providerSparkline(item) {
-  const rates = ['6h', '24h', '7d', '30d'].map((key) => Number(item.successRates?.[key] ?? 0) * 100)
-  return `<div class="provider-sparkline" data-rates="${escapeHTML(JSON.stringify(rates))}" data-bubble="6h ${number(rates[0], 1)}% · 24h ${number(rates[1], 1)}% · 7d ${number(rates[2], 1)}% · 30d ${number(rates[3], 1)}%"><canvas width="150" height="34" aria-label="${escapeHTML(item.planType)} 可用率趋势"></canvas></div>`
+function finiteProviderValue(value) {
+  if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return null
+  return Number(value)
+}
+
+function sortedProviders(items, sort = state.providerSort) {
+  const indexed = items.map((item, index) => ({ item, index }))
+  const valueFor = ({ item }) => {
+    if (sort === 'rate') return finiteProviderValue(item.priceMultiplier)
+    if (sort === 'first_token') return finiteProviderValue(item.firstTokenLatencyMs)
+    return finiteProviderValue(item.successRates?.[state.providerWindow])
+  }
+  return indexed.sort((left, right) => {
+    const a = valueFor(left)
+    const b = valueFor(right)
+    if (a === null && b === null) return left.index - right.index
+    if (a === null) return 1
+    if (b === null) return -1
+    const compared = sort === 'availability' ? b - a : a - b
+    return compared || left.index - right.index
+  }).map(({ item }) => item)
+}
+
+function providerMetricPoints(series, metric = state.providerMetric) {
+  const index = metric === 'tps' ? 3 : metric === 'input_tokens' ? 4 : 2
+  return (Array.isArray(series) ? series : []).map((point) => finiteProviderValue(point?.[index])).filter((value) => value !== null)
+}
+
+function providerSparkline(item, series) {
+  const points = providerMetricPoints(series)
+  if (!points.length) return '<span class="provider-series-unavailable">暂无趋势</span>'
+  return `<div class="provider-sparkline" data-rates="${escapeHTML(JSON.stringify(points))}"><canvas width="150" height="34" aria-label="${escapeHTML(item.planType)} 指标趋势"></canvas></div>`
 }
 
 function providerCacheHitLabel(value) {
@@ -826,15 +874,21 @@ function renderProviderSparklines() {
     state.providerCharts.push(new window.Chart(canvas, {
       type: 'line',
       data: { labels: ['6h', '24h', '7d', '30d'], datasets: [{ data: rates, borderColor: accent, borderWidth: 1.8, pointRadius: 0, pointHoverRadius: 3, tension: .34, fill: false }] },
-      options: { responsive: false, animation: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false, min: 0, max: 100 } }, elements: { line: { capBezierPoints: true } } },
+      options: { responsive: false, animation: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } }, elements: { line: { capBezierPoints: true } } },
     }))
   })
 }
 
 async function renderProviders() {
-  const summary = await request(`/public/monitor/summary?timezone=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai')}`)
-  const items = (summary?.apis || []).slice().sort((a, b) => String(a.planType || '').localeCompare(String(b.planType || ''), 'en', { numeric: true }))
   const period = state.providerWindow
+  if (!state.providerSummary) state.providerSummary = await request(`/public/monitor/summary?timezone=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai')}`)
+  const summary = state.providerSummary
+  if (!state.providerSeries[period]) {
+    try { state.providerSeries[period] = await request(`/public/monitor/series/${period}`) }
+    catch { state.providerSeries[period] = { seriesByApiId: {}, unavailable: true } }
+  }
+  const seriesByApiId = state.providerSeries[period]?.seriesByApiId || {}
+  const items = sortedProviders(summary?.apis || [])
   const columns = items.map((item) => {
     const [statusClass, statusLabel] = providerStateLabel(item)
     const rate = Number(item.successRates?.[period] ?? 0) * 100
@@ -847,13 +901,15 @@ async function renderProviders() {
       <div class="cell-title"><strong>${firstToken == null ? '-' : `${number(firstToken)} ms`}</strong><span>${tps == null ? 'TPS -' : `TPS ${number(tps, 2)}/s`}</span><span>↑ ${number(item.outputTokens || 0)} · ↓ ${number(item.inputTokens || 0)}</span></div>
       <span class="cache-hit-rate ${providerCacheHitInsufficient(item.cacheHitRate) ? 'insufficient' : ''}">${escapeHTML(providerCacheHitLabel(item.cacheHitRate))}</span>
       <span class="availability-number">${number(rate, 1)}%</span>
-      ${providerSparkline(item)}
+      ${providerSparkline(item, seriesByApiId[item.id])}
       <span class="last-checked">${escapeHTML(dateTime(item.checkedAt))}</span>
-      <button class="secondary-button use-group-button" data-action="use-provider-group" data-group-id="${escapeHTML(item.group_id)}" data-group-name="${escapeHTML(item.planType || `分组 ${item.group_id}`)}" data-group-rate="${escapeHTML(item.priceMultiplier)}" ${Number(item.group_id) > 0 ? '' : 'disabled'}>使用此分组</button>
+      <button class="secondary-button use-group-button" data-action="use-provider-group" data-group-id="${escapeHTML(item.group_id)}" data-group-name="${escapeHTML(item.planType || `分组 ${item.group_id}`)}" data-group-rate="${escapeHTML(item.priceMultiplier)}" ${Number.isFinite(Number(item.group_id)) && Number(item.group_id) > 0 ? '' : 'disabled'}>使用此分组</button>
     </div>`
   }).join('')
   const overall = summary?.monitoringActive === false ? ['pending', '监控暂停'] : items.some((item) => item.available === false) ? ['failed', '有服务不可用'] : items.some((item) => item.warningReasons?.length) ? ['pending', '存在告警'] : ['operational', '监测中']
-  $('#content').innerHTML = `<div class="page-stack"><section class="panel provider-hall-panel"><div class="provider-hall-toolbar"><div><div class="provider-title-line"><h2>供应商大厅</h2><span class="status-badge ${overall[0]}">${overall[1]}</span></div><p>首 Token 可能因技术限制与中转站后台不一致；缓存样本不足 1000 条时不展示命中率。</p></div><div class="provider-toolbar-actions"><div class="segmented">${[['6h', '6h'], ['24h', '24h'], ['7d', '7d'], ['30d', '30d']].map(([value, label]) => `<button data-provider-window="${value}" class="${period === value ? 'active' : ''}">${label}</button>`).join('')}</div><span class="last-generated">${escapeHTML(dateTime(summary?.generatedAt))}</span><button class="secondary-button" data-action="refresh-providers"><i data-lucide="refresh-cw"></i>刷新</button></div></div><div class="provider-table-head"><span>分组</span><span>倍率</span><span>最新状态</span><span>最新首 Token</span><span>缓存命中率</span><span>可用率 ↓</span><span>曲线</span><span>最近监测</span><span>使用此分组</span></div>${columns ? `<div class="provider-list">${columns}</div>` : empty('store', '暂无供应商数据', '站点暂时没有发布可用的供应商分组。')}</section></div>`
+  const sortControls = [['rate', '倍率'], ['first_token', '最快首字'], ['availability', '可用率']].map(([value, label]) => `<button data-provider-sort="${value}" class="${state.providerSort === value ? 'active' : ''}">${label}</button>`).join('')
+  const metricControls = [['first_token', '首字'], ['tps', 'TPS'], ['input_tokens', '输入 Token']].map(([value, label]) => `<button data-provider-metric="${value}" class="${state.providerMetric === value ? 'active' : ''}">${label}</button>`).join('')
+  $('#content').innerHTML = `<div class="page-stack"><section class="panel provider-hall-panel"><div class="provider-hall-toolbar"><div><div class="provider-title-line"><h2>供应商大厅</h2><span class="status-badge ${overall[0]}">${overall[1]}</span></div><p>首 Token 可能因技术限制与中转站后台不一致；缓存样本不足 1000 条时不展示命中率。</p></div><div class="provider-toolbar-actions"><div class="segmented">${sortControls}</div><div class="segmented">${metricControls}</div><div class="segmented">${[['6h', '6h'], ['24h', '24h'], ['7d', '7d'], ['30d', '30d']].map(([value, label]) => `<button data-provider-window="${value}" class="${period === value ? 'active' : ''}">${label}</button>`).join('')}</div><span class="last-generated">${escapeHTML(dateTime(summary?.generatedAt))}</span><button class="secondary-button" data-action="refresh-providers"><i data-lucide="refresh-cw"></i>刷新</button></div></div><div class="provider-table-head"><span>分组</span><span>倍率</span><span>最新状态</span><span>最新首 Token</span><span>缓存命中率</span><span>可用率 ↓</span><span>${state.providerMetric === 'tps' ? 'TPS 趋势' : state.providerMetric === 'input_tokens' ? '输入趋势' : '首字趋势'}</span><span>最近监测</span><span>使用此分组</span></div>${columns ? `<div class="provider-list">${columns}</div>` : empty('store', '暂无供应商数据', '站点暂时没有发布可用的供应商分组。')}</section></div>`
   icons($('#content'))
   renderProviderSparklines()
 }
@@ -1703,15 +1759,31 @@ function confirmModal(title, message, confirmAction, danger = false) {
 }
 
 async function handleContentClick(event) {
-  const target = event.target.closest('[data-action], [data-route-jump], [data-period-value], [data-provider-tab], [data-provider-window], [data-client-tab], [data-log-mode]')
+  const target = event.target.closest('[data-action], [data-route-jump], [data-dashboard-route], [data-period-value], [data-provider-tab], [data-provider-window], [data-provider-sort], [data-provider-metric], [data-client-tab], [data-log-mode]')
   if (!target) return
   if (target.dataset.routeJump) return navigate(target.dataset.routeJump)
+  if (target.dataset.dashboardRoute) {
+    const route = target.dataset.dashboardRoute
+    if (route === 'failover') {
+      state.logs = { ...state.logs, mode: 'failover', page: 1, filters: {} }
+      return navigate('logs')
+    }
+    return navigate(route)
+  }
   if (target.dataset.periodValue) {
     state.usagePeriod = target.dataset.periodValue
     return navigate('usage')
   }
   if (target.dataset.providerWindow) {
     state.providerWindow = target.dataset.providerWindow
+    return renderProviders()
+  }
+  if (target.dataset.providerSort) {
+    state.providerSort = target.dataset.providerSort
+    return renderProviders()
+  }
+  if (target.dataset.providerMetric) {
+    state.providerMetric = target.dataset.providerMetric
     return renderProviders()
   }
   if (target.dataset.clientTab) {
@@ -1809,7 +1881,11 @@ async function handleContentClick(event) {
   if (action === 'logs-prev') { state.logs.page = Math.max(1, state.logs.page - 1); return renderLogs() }
   if (action === 'logs-next') { state.logs.page += 1; return renderLogs() }
   if (action === 'reset-log-filters') { state.logs = { ...state.logs, page: 1, filters: {} }; return renderLogs() }
-  if (action === 'refresh-providers') return renderProviders()
+  if (action === 'refresh-providers') {
+    state.providerSummary = null
+    delete state.providerSeries[state.providerWindow]
+    return renderProviders()
+  }
   if (action === 'new-client-profile') {
     await ensureClientKeys()
     return createClientProfileModal()

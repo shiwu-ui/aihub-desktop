@@ -44,6 +44,7 @@ async function run() {
           monitoringActive: true, generatedAt: '2026-07-19T01:00:00Z',
           apis: [{ id: 'stable', group_id: 2, planType: 'Stable', platform: 'openai', available: true, priceMultiplier: 0.02, firstTokenLatencyMs: 420, outputTokensPerSecond: 70, inputTokens: 800, outputTokens: 200, cacheHitRate: 'Insufficient', checkedAt: '2026-07-19T01:00:00Z', successRates: { '6h': 0.99, '24h': 0.98, '7d': 0.97, '30d': 0.96 } }],
         }
+        if (route === '/public/monitor/series/6h') return { seriesByApiId: { stable: [['2026-07-19T00:00:00Z', 1, 420, 70, 800]] } }
         if (route === '/groups/available') return groups
         if (route.startsWith('/keys?')) return { items: [key], total: 21, pages: 2 }
         if (route === '/keys/7' && (!options.method || options.method === 'GET')) return key
@@ -55,6 +56,13 @@ async function run() {
       await navigate('providers')
     })
     await page.waitForSelector('.provider-row')
+    assert.deepEqual(await page.locator('[data-provider-sort]').allTextContents(), ['倍率', '最快首字', '可用率'])
+    assert.deepEqual(await page.locator('[data-provider-metric]').allTextContents(), ['首字', 'TPS', '输入 Token'])
+    assert.deepEqual(await page.evaluate(() => sortedProviders([
+      { id: 'missing', priceMultiplier: null, firstTokenLatencyMs: null, successRates: { '6h': null } },
+      { id: 'slow', priceMultiplier: 0.02, firstTokenLatencyMs: 800, successRates: { '6h': 0.99 } },
+      { id: 'cheap', priceMultiplier: 0.01, firstTokenLatencyMs: 200, successRates: { '6h': 0.8 } },
+    ], 'rate').map((item) => item.id)), ['cheap', 'slow', 'missing'])
     const cacheText = await page.textContent('.cache-hit-rate')
     await page.click('[data-action="use-provider-group"]')
     await page.selectOption('#provider-key-switch-form select', '7')
