@@ -21,6 +21,7 @@ const ALLOWED_PREFIXES = [
   '/announcements',
   '/redeem',
   '/payment',
+  '/invoices',
   '/groups',
   '/public/monitor/summary',
 ]

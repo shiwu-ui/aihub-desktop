@@ -56,6 +56,7 @@ const routeMeta = {
   guide: ['USER GUIDE', '使用教程'],
   plans: ['PLANS', '套餐'],
   billing: ['RECHARGE', '充值'],
+  invoices: ['INVOICES', '自助发票'],
   redeem: ['REDEEM', '兑换码'],
   affiliate: ['AFFILIATE', '邀请返利'],
   account: ['ACCOUNT', '账户'],
@@ -139,6 +140,13 @@ function paymentStatusClass(status) {
   if (['cancelled', 'expired'].includes(normalized)) return normalized
   if (['failed', 'refund_failed'].includes(normalized)) return 'failed'
   return normalized
+}
+
+function normalizeInvoiceEmails(value) {
+  const emails = String(value || '').split(/[\s,，;；]+/).map((email) => email.trim()).filter(Boolean)
+  if (!emails.length || emails.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return ''
+  const normalized = emails.join(', ')
+  return new TextEncoder().encode(normalized).length <= 255 ? normalized : ''
 }
 
 function cleanupPaymentPolling(clearBilling = false) {
@@ -288,7 +296,7 @@ async function navigate(route) {
   $('#page-title').textContent = routeMeta[route][1]
   loadingPage()
   try {
-    await ({ dashboard: renderDashboard, keys: renderKeys, usage: renderUsage, logs: renderLogs, providers: renderProviders, clients: renderClients, guide: renderGuide, plans: renderPlans, billing: renderBilling, redeem: renderRedeem, affiliate: renderAffiliate, account: renderAccount, changelog: renderChangelog, about: renderAbout }[route])()
+    await ({ dashboard: renderDashboard, keys: renderKeys, usage: renderUsage, logs: renderLogs, providers: renderProviders, clients: renderClients, guide: renderGuide, plans: renderPlans, billing: renderBilling, invoices: renderInvoices, redeem: renderRedeem, affiliate: renderAffiliate, account: renderAccount, changelog: renderChangelog, about: renderAbout }[route])()
   } catch (error) {
     $('#content').innerHTML = `<div class="page-stack">${empty('cloud-off', '暂时无法载入', error.message, '<button class="secondary-button" data-action="retry"><i data-lucide="refresh-cw"></i>重试</button>')}</div>`
     icons($('#content'))
@@ -912,6 +920,35 @@ async function renderBilling() {
       if (state.route === 'billing' && !state.payment.activeOrder && !document.body.classList.contains('modal-open')) renderBilling().catch(() => {})
     }, 12000)
   }
+}
+
+async function renderInvoices() {
+  const [eligibleData, applicationsData] = await Promise.all([
+    request('/invoices/eligible-orders'),
+    request('/invoices/my'),
+  ])
+  const eligibleOrders = paginated(eligibleData).items
+  const applications = paginated(applicationsData).items
+  const orderOptions = eligibleOrders.map((order) => `<option value="${escapeHTML(order.id)}">#${escapeHTML(order.out_trade_no || order.id)} · ${escapeHTML(gatewayMoney(order.amount, order.currency || 'CNY'))} · ${escapeHTML(dateTime(order.completed_at || order.created_at))}</option>`).join('')
+  const applicationRows = applications.map((item) => {
+    const processed = String(item.status || '').toLowerCase() === 'processed'
+    return `<tr><td>#${escapeHTML(item.payment_order_id)}</td><td><div class="cell-title"><strong>${escapeHTML(item.company_title || '-')}</strong><span>${escapeHTML(item.tax_number || '-')}</span></div></td><td>${escapeHTML(item.email || '-')}</td><td><span class="status-badge ${processed ? 'active' : 'pending'}">${processed ? '已处理' : '待审核'}</span></td><td>${escapeHTML(dateTime(item.created_at))}</td></tr>`
+  }).join('')
+  $('#content').innerHTML = `<div class="page-stack invoice-page">
+    <section id="invoice-rules" class="invoice-rules"><div class="invoice-rules-icon"><i data-lucide="file-check-2"></i></div><div><p class="eyebrow">申请规则</p><h2>充值满 300，可申请研发服务发票</h2><p>单笔已完成充值达到 300 方可申请，同一订单不能重复提交。发票内容为“研发服务”，预计 1 - 3 个工作日发送到收票邮箱。</p></div></section>
+    <div class="two-column invoice-columns">
+      <section class="panel"><div class="panel-header"><div><h2>提交申请</h2><p>支持填写多个收票邮箱</p></div></div><div class="panel-body">${eligibleOrders.length ? `<form id="invoice-application-form" class="form-grid">
+        <label class="span-two"><span>充值订单</span><select name="payment_order_id" required><option value="">请选择符合条件的订单</option>${orderOptions}</select></label>
+        <label class="span-two"><span>公司 / 个人抬头</span><input name="company_title" maxlength="200" required /></label>
+        <label class="span-two"><span>税号</span><input name="tax_number" maxlength="64" required /></label>
+        <label class="span-two"><span>收票邮箱</span><input name="email" inputmode="email" maxlength="255" placeholder="多个邮箱可用逗号、分号或空格分隔" required /><small>提交前会统一为英文逗号分隔，最长 255 字节。</small></label>
+        <div class="span-two button-row"><button type="submit" class="primary-button"><i data-lucide="send"></i>提交发票申请</button></div>
+      </form>` : empty('receipt-text', '暂无可申请订单', '单笔已完成充值达到 300 后，可在这里提交发票申请。')}</div></section>
+      <section class="panel invoice-delivery"><div class="panel-header"><div><h2>邮件交付</h2><p>站内不保存发票文件</p></div></div><div class="panel-body detail-list"><div class="detail-row"><span>开票内容</span><strong>研发服务</strong></div><div class="detail-row"><span>预计时效</span><strong>1 - 3 个工作日</strong></div><div class="detail-row"><span>交付方式</span><strong>发送到收票邮箱</strong></div></div></section>
+    </div>
+    <section id="invoice-applications" class="panel"><div class="panel-header"><div><h2>申请记录</h2><p>${number(applications.length)} 条记录</p></div></div>${applicationRows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>订单</th><th>抬头 / 税号</th><th>邮箱</th><th>状态</th><th>申请时间</th></tr></thead><tbody>${applicationRows}</tbody></table></div>` : empty('clock-3', '暂无申请记录', '提交发票申请后，处理状态会显示在这里。')}</section>
+  </div>`
+  icons($('#content'))
 }
 
 function updateRechargePreview() {
@@ -1655,6 +1692,23 @@ async function handleContentSubmit(event) {
         body: { amount, payment_type: method, order_type: 'balance', return_url: 'https://aihub.top/payment/result', payment_source: 'hosted_redirect', is_mobile: false },
       })
       showPaymentOrder({ ...order, paymentType: method })
+      return
+    }
+    if (form.id === 'invoice-application-form') {
+      const data = new FormData(form)
+      const email = normalizeInvoiceEmails(data.get('email'))
+      if (!email) throw new Error('请输入有效的收票邮箱，多个邮箱可用逗号、分号或空格分隔')
+      await request('/invoices', {
+        method: 'POST',
+        body: {
+          payment_order_id: Number(data.get('payment_order_id')),
+          company_title: String(data.get('company_title')).trim(),
+          tax_number: String(data.get('tax_number')).trim(),
+          email,
+        },
+      })
+      toast('发票申请已提交')
+      await navigate('invoices')
       return
     }
     if (form.id === 'profile-form') {

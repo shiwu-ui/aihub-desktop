@@ -13,6 +13,7 @@
     "test:client-ui": "node tools/client-config-ui-smoke.cjs",
     "test:payment-ui": "node tools/payment-ui-smoke.cjs",
     "test:payment-flow": "node tools/payment-flow-smoke.cjs",
+    "test:invoice-flow": "node tools/invoice-flow-smoke.cjs",
     "test:provider-key-features": "node tools/provider-key-features-smoke.cjs",
     "test:guide-tray-contract": "node tools/guide-tray-contract-smoke.cjs",
     "test:single-instance": "node tools/single-instance-smoke.cjs",
