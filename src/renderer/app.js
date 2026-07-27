@@ -1129,15 +1129,21 @@ async function renderAccount() {
 
 function renderGuide() {
   const sections = [
-    { number: '01', title: '登录与总览', icon: 'layout-dashboard', body: '<p>使用 AIHub 普通用户邮箱和密码登录。勾选“记住此账号”只保存邮箱，登录令牌由 Windows 安全存储保护，密码不会写入本机。</p><p>进入总览后可查看余额、今日消费、请求量、输入与输出 Token、缓存 Token、消费趋势和站内公告。</p>', action: ['dashboard', '打开总览'] },
-    { number: '02', title: 'API Key 与官方故障转移', icon: 'key-round', body: '<p>在 API Key 页面创建或编辑密钥，选择供应商分组，并设置最大倍率。最大倍率填写 <strong>0</strong> 表示不限制。</p><p>故障转移选项只会把 <code>failover_enabled</code>、<code>failover_strategy</code> 和 <code>failover_group_ids</code> 提交到 AIHub 的 <code>/api/v1/keys</code> 接口，由 AIHub 服务端执行切换；桌面端不保存号池，也不自行重试请求。</p>', action: ['keys', '管理 API Key'] },
-    { number: '03', title: '供应商大厅', icon: 'store', body: '<p>供应商大厅展示分组倍率、可用率、首 Token、TPS、缓存命中率和监测趋势。样本不足时会明确显示“样本不足”。</p><p>可以从供应商分组新建 Key，或把已有 Key 切换到指定分组。</p>', action: ['providers', '查看供应商大厅'] },
-    { number: '04', title: '客户端配置', icon: 'blocks', body: '<p>客户端配置页会静默检测 codex、codex (WebSocket) 和 OpenCode 是否安装，并在已安装时显示目录。</p><p>生成配置前填写模型、供应商、请求地址和 API Key。保存配置档前会自动备份，写入失败会回滚；可以在配置备份中恢复历史版本。</p>', action: ['clients', '打开客户端配置'] },
-    { number: '05', title: '用量、调用日志与账户', icon: 'chart-no-axes-combined', body: '<p>用量页按时间范围查看输入、输出、缓存读取和缓存写入 Token。调用日志支持筛选、查看详情和导出 CSV。</p><p>账户区域提供套餐、充值、兑换码、邀请返利、密码修改和全设备会话撤销。充值始终跳转 AIHub 官方收银台。</p>', action: ['usage', '查看用量'] },
-    { number: '06', title: '窗口关闭与系统托盘', icon: 'panel-top-close', body: '<p>点击窗口关闭按钮时，可以选择取消、最小化到系统托盘或退出软件。最小化后可在 Windows 托盘图标中重新打开窗口，或选择退出。</p><p>托盘只负责管理窗口生命周期，不承载 API 请求、Key 池或故障转移逻辑。</p>', action: ['about', '查看软件信息'] },
+    { number: '01', title: 'Node.js 环境安装', icon: 'square-terminal', body: '<p>Claude Code、Codex 和 Gemini CLI 都可通过 npm 安装。建议使用 Node.js 20 LTS 或更高版本，安装后重新打开终端。</p>', code: 'node -v\nnpm -v', link: ['https://nodejs.org/en/download', '下载 Node.js LTS'] },
+    { number: '02', title: 'API 密钥高级功能', icon: 'key-round', body: '<p>创建或编辑密钥时可同时设置最大倍率、倍率变动邮件、三种故障转移策略、候选或排除分组，以及自然回切、积极回切和不自动回切。</p><p>转移依据真实分组样本、供应商大厅探测与满足前两项后的主动探测，并由 AIHub 服务端执行切换。</p>', action: ['keys', '管理 API Key'] },
+    { number: '03', title: 'CCS 一键导入', icon: 'import', body: '<p>推荐先安装 CC Switch，再从 AIHub 密钥列表发起一键导入。写入前请核对应用类型、API 端点、模型和密钥掩码。</p>', link: ['https://github.com/farion1231/cc-switch/releases/latest', '下载 CC Switch'] },
+    { number: '04', title: 'Claude Code 配置教程', icon: 'bot', body: '<p>安装 Anthropic 官方 CLI，并在 <code>~/.claude/settings.json</code> 中把请求地址与认证令牌指向 AIHub。配置文件包含明文 Key，请勿提交或分享。</p>', code: 'npm install -g @anthropic-ai/claude-code\nclaude --version\n\nANTHROPIC_BASE_URL=https://api.aihub.top\nANTHROPIC_AUTH_TOKEN=<AIHUB_API_KEY>' },
+    { number: '05', title: 'Codex 配置教程', icon: 'code-2', body: '<p>通过自定义模型提供商连接 AIHub 的 OpenAI 兼容接口。配置保存在 <code>~/.codex/config.toml</code> 和 <code>~/.codex/auth.json</code>。</p>', code: 'npm install -g @openai/codex@latest\ncodex --version\n\nbase_url = "https://aihub.top/v1"\nexperimental_bearer_token = "<AIHUB_API_KEY>"' },
+    { number: '06', title: 'Gemini CLI 配置教程', icon: 'sparkles', body: '<p>使用 Gemini API Key 鉴权模式，把 <code>~/.gemini/.env</code> 中的网关地址设置为 AIHub。</p>', code: 'npm install -g @google/gemini-cli\ngemini --version\n\nGEMINI_API_KEY=<AIHUB_API_KEY>\nGOOGLE_GEMINI_BASE_URL=https://api.aihub.top' },
+    { number: '07', title: 'AIHubRouter 自动路由工具', icon: 'route', body: '<p>AIHubRouter 是跨平台开源工具，可按倍率和首 Token 速度调整 Key 分组。它只调用 AIHub API，不代理模型请求，也不修改本地 CLI 配置。</p>', code: 'aihub-router route --once --dry-run --json\naihub-router watch --interval 60 --json', link: ['https://github.com/OnRightPath/AIHubRouter', '查看 AIHubRouter'] },
+    { number: '08', title: '社区工具推荐', icon: 'users-round', body: '<p>站点社区还提供 Windows 状态客户端、AIHub Smart Group、LLM Retry Proxy、QQ 群机器人和 CC Switch 社区版。能力与版本以各项目仓库为准。</p>', link: ['https://aihub.top/tutorial#community-tools', '查看社区工具'] },
   ]
-  const cards = sections.map((section) => `<article class="guide-section"><header><span class="guide-number">${section.number}</span><div><h2><i data-lucide="${section.icon}"></i>${section.title}</h2></div></header><div class="guide-section-body">${section.body}<button class="secondary-button" data-route-jump="${section.action[0]}"><i data-lucide="arrow-up-right"></i>${section.action[1]}</button></div></article>`).join('')
-  $('#content').innerHTML = `<div class="page-stack guide-page"><section class="guide-hero"><div><p class="eyebrow">AIHUB DESKTOP · USER GUIDE</p><h2>从登录到稳定使用</h2><p>这份教程只对应当前 1.0.6 桌面端：普通用户登录、官方 API Key 策略、供应商大厅、客户端配置和账户服务。</p></div><span class="status-badge active">v${APP_VERSION}</span></section><div class="guide-grid">${cards}</div><section class="panel guide-note"><div class="panel-body"><i data-lucide="shield-check"></i><div><strong>接口边界</strong><p>桌面端只通过普通用户接口访问 AIHub，拒绝管理员路径。API Key 的故障转移策略由 AIHub 网站接口保存和执行。</p></div></div></section></div>`
+  const cards = sections.map((section) => {
+    const code = section.code ? `<div class="guide-code"><pre><code>${escapeHTML(section.code)}</code></pre><button class="icon-button" data-action="copy-guide-code" title="复制命令" aria-label="复制命令"><i data-lucide="copy"></i></button></div>` : ''
+    const action = section.action ? `<button class="secondary-button" data-route-jump="${section.action[0]}"><i data-lucide="arrow-up-right"></i>${section.action[1]}</button>` : section.link ? `<button class="secondary-button" data-action="open-guide-link" data-url="${escapeHTML(section.link[0])}"><i data-lucide="external-link"></i>${section.link[1]}</button>` : ''
+    return `<article class="guide-section"><header><span class="guide-number">${section.number}</span><div><h2><i data-lucide="${section.icon}"></i>${section.title}</h2></div></header><div class="guide-section-body">${section.body}${code}${action}</div></article>`
+  }).join('')
+  $('#content').innerHTML = `<div class="page-stack guide-page"><section class="guide-hero"><div><p class="eyebrow">AIHUB DESKTOP · USER GUIDE</p><h2>从环境准备到自动路由</h2><p>这份教程对应当前 1.0.6 桌面端，并同步 AIHub 站点当前八章结构。示例模型与工具版本可能随站点更新。</p></div><span class="status-badge active">v${APP_VERSION}</span></section><div class="guide-grid">${cards}</div><section class="panel guide-note"><div class="panel-body"><i data-lucide="shield-check"></i><div><strong>接口边界</strong><p>桌面端只通过普通用户接口访问 AIHub，拒绝管理员路径。API Key 的故障转移策略由 AIHub 服务端执行切换；桌面端不保存号池，也不代理模型请求。</p></div></div></section></div>`
   icons($('#content'))
 }
 
@@ -1371,6 +1377,12 @@ async function handleContentClick(event) {
   }
   const action = target.dataset.action
   if (action === 'retry') return navigate(state.route)
+  if (action === 'open-guide-link') return window.aihub.openExternal(target.dataset.url)
+  if (action === 'copy-guide-code') {
+    const code = target.closest('.guide-code')?.querySelector('code')?.textContent
+    if (code) { await window.aihub.copyText(code); toast('命令已复制') }
+    return
+  }
   if (action === 'open-purchase-page') return window.aihub.openExternal('https://aihub.top/purchase')
   if (action === 'announcement-detail') return openAnnouncementDetail(target.dataset.id)
   if (action === 'set-recharge-amount') {

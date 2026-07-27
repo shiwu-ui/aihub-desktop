@@ -38,12 +38,28 @@ async function run() {
       return navigate('guide')
     })
     await page.waitForSelector('.guide-section')
+    assert.equal(await page.locator('.guide-section').count(), 8)
     const guide = await page.textContent('#content')
+    for (const chapter of [
+      'Node.js 环境安装',
+      'API 密钥高级功能',
+      'CCS 一键导入',
+      'Claude Code 配置教程',
+      'Codex 配置教程',
+      'Gemini CLI 配置教程',
+      'AIHubRouter 自动路由工具',
+      '社区工具推荐',
+    ]) {
+      assert.match(guide, new RegExp(chapter))
+    }
     assert.match(guide, /当前 1\.0\.6 桌面端/)
     assert.match(guide, /由 AIHub 服务端执行切换/)
     assert.doesNotMatch(guide, /本地代理|号池同步/)
     const guideOverflow = await page.evaluate(() => ({ body: document.body.scrollWidth - document.body.clientWidth, content: document.querySelector('#content').scrollWidth - document.querySelector('#content').clientWidth }))
     assert.deepEqual(guideOverflow, { body: 0, content: 0 })
+    await page.setViewportSize({ width: 980, height: 680 })
+    const compactGuideOverflow = await page.evaluate(() => ({ body: document.body.scrollWidth - document.body.clientWidth, content: document.querySelector('#content').scrollWidth - document.querySelector('#content').clientWidth }))
+    assert.deepEqual(compactGuideOverflow, { body: 0, content: 0 })
     const screenshotDir = process.env.AIHUB_SCREENSHOT_DIR
     if (screenshotDir) {
       await fsp.mkdir(screenshotDir, { recursive: true })

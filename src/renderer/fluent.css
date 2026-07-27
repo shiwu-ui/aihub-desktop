@@ -600,6 +600,10 @@ textarea { min-height: 90px; resize: vertical; }
 .guide-section-body strong { color: var(--text); }
 .guide-section-body code { border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; color: var(--accent); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; }
 .guide-section-body button { width: fit-content; }
+.guide-code { position: relative; min-width: 0; }
+.guide-code pre { max-height: 160px; overflow: auto; margin: 0; border: 1px solid var(--line); border-radius: 6px; padding: 10px 38px 10px 10px; background: var(--input); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.guide-code code { border: 0; padding: 0; background: transparent; color: inherit; font: 9px/1.55 "Cascadia Code",Consolas,monospace; }
+.guide-code .icon-button { position: absolute; top: 5px; right: 5px; width: 26px; height: 26px; }
 .guide-note .panel-body { display: flex; align-items: flex-start; gap: 10px; }
 .guide-note svg { width: 17px; height: 17px; flex: 0 0 auto; color: var(--accent); }
 .guide-note strong { display: block; margin-bottom: 4px; font-size: 11px; }
