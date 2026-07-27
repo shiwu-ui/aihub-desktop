@@ -23,7 +23,7 @@ async function run() {
   assert.match(rendererSource, /failover_enabled: enabled/)
   assert.match(rendererSource, /failover_strategy: strategy/)
   assert.match(rendererSource, /failover_group_ids:/)
-  assert.doesNotMatch(rendererSource, /retry-proxy|renderRetryProxy|proxyRequest/)
+  assert.doesNotMatch(rendererSource, /renderRetryProxy|proxyRequest/)
 
   const sandbox = await fsp.mkdtemp(path.join(os.tmpdir(), 'aihub-guide-tray-'))
   const app = await electron.launch({ executablePath: require('electron'), args: ['.', `--user-data-dir=${path.join(sandbox, 'electron')}`], cwd: root })
@@ -52,9 +52,18 @@ async function run() {
     ]) {
       assert.match(guide, new RegExp(chapter))
     }
-    assert.match(guide, /当前 1\.0\.6 桌面端/)
+    assert.match(guide, /当前 1\.1\.0 桌面端/)
     assert.match(guide, /由 AIHub 服务端执行切换/)
     assert.doesNotMatch(guide, /本地代理|号池同步/)
+    assert.ok(await page.locator('.guide-step').count() >= 20)
+    assert.deepEqual(await page.locator('[data-guide-platform]').allTextContents(), ['Windows', 'macOS', 'Linux / WSL'])
+    assert.ok(await page.locator('[data-action="copy-guide-code"]').count() >= 8)
+    await page.getByRole('button', { name: 'Linux / WSL', exact: true }).click()
+    assert.match(await page.textContent('#content'), /nvm install --lts/)
+    await page.getByRole('button', { name: 'Windows', exact: true }).click()
+    assert.match(await page.textContent('#content'), /winget install OpenJS\.NodeJS\.LTS/)
+    for (const tool of ['AIHUB_check_api', 'AIHub Smart Group', 'LLM Retry Proxy', 'AIHUB QQ 群机器人', 'CC Switch 社区版']) assert.match(guide, new RegExp(tool))
+    assert.doesNotMatch(guide, /sk-[A-Za-z0-9_-]{20,}/)
     const guideOverflow = await page.evaluate(() => ({ body: document.body.scrollWidth - document.body.clientWidth, content: document.querySelector('#content').scrollWidth - document.querySelector('#content').clientWidth }))
     assert.deepEqual(guideOverflow, { body: 0, content: 0 })
     await page.setViewportSize({ width: 980, height: 680 })
@@ -64,7 +73,7 @@ async function run() {
     if (screenshotDir) {
       await fsp.mkdir(screenshotDir, { recursive: true })
       await page.setViewportSize({ width: 1280, height: 820 })
-      await page.screenshot({ path: path.join(screenshotDir, 'guide-1.0.6.png'), fullPage: true })
+      await page.screenshot({ path: path.join(screenshotDir, 'guide-1.1.0.png'), fullPage: true })
     }
 
     await page.evaluate(() => navigate('about'))
@@ -75,14 +84,14 @@ async function run() {
     assert.doesNotMatch(about, /llm-retry-proxy/)
     const aboutOverflow = await page.evaluate(() => ({ body: document.body.scrollWidth - document.body.clientWidth, content: document.querySelector('#content').scrollWidth - document.querySelector('#content').clientWidth }))
     assert.deepEqual(aboutOverflow, { body: 0, content: 0 })
-    if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'about-acknowledgements-1.0.6.png'), fullPage: true })
+    if (screenshotDir) await page.screenshot({ path: path.join(screenshotDir, 'about-acknowledgements-1.1.0.png'), fullPage: true })
     assert.deepEqual(pageErrors, [])
   } finally {
     await app.evaluate(({ app: electronApp }) => electronApp.exit(0)).catch(() => {})
     await fsp.rm(sandbox, { recursive: true, force: true }).catch(() => {})
   }
 
-  console.log(JSON.stringify({ ok: true, guide: '1.0.6', tray: true, failover: 'aihub-api', acknowledgements: true }))
+  console.log(JSON.stringify({ ok: true, guide: '1.1.0', tray: true, failover: 'aihub-api', acknowledgements: true }))
 }
 
 run().catch((error) => {

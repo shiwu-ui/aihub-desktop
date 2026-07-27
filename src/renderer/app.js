@@ -14,6 +14,7 @@ const state = {
   keyList: { page: 1, pageSize: 20, search: '', groupId: '', status: '', columns: { concurrency: true, todayUsage: true, monthUsage: true, expiresAt: true } },
   clientSelectedKeyId: null,
   groups: [],
+  guidePlatform: 'windows',
   usagePeriod: 'month',
   usageAnalytics: {
     page: 1,
@@ -52,6 +53,7 @@ const state = {
     verifyAttempts: 0,
     lastVerifyAt: 0,
   },
+  orders: { page: 1, pageSize: 20, status: '' },
 }
 
 const PAYMENT_METHOD_ORDER = ['alipay', 'wxpay', 'stripe', 'airwallex']
@@ -1161,8 +1163,10 @@ async function renderRedeem() {
 }
 
 async function renderBilling() {
+  const orderState = state.orders
+  const orderQuery = queryString({ page: orderState.page, page_size: orderState.pageSize, status: orderState.status })
   const [ordersData, paymentConfig, checkout, user] = await Promise.all([
-    request('/payment/orders/my?page=1&page_size=20').catch(() => ({ items: [], total: 0 })),
+    request(`/payment/orders/my?${orderQuery}`).catch(() => ({ items: [], total: 0, pages: 1 })),
     request('/payment/config').catch((error) => ({ payment_enabled: false, unavailable_reason: error.message })),
     request('/payment/checkout-info').catch(() => ({ methods: {}, plans: [], balance_disabled: true, balance_recharge_multiplier: 1, recharge_fee_rate: 0 })),
     request('/auth/me'),
@@ -1173,7 +1177,8 @@ async function renderBilling() {
   const enabledMethods = methods.filter((item) => item.available !== false)
   if (!enabledMethods.some((item) => item.type === state.payment.selectedMethod)) state.payment.selectedMethod = enabledMethods[0]?.type || ''
   const rechargeEnabled = paymentConfig?.payment_enabled !== false && checkout?.balance_disabled !== true && enabledMethods.length > 0
-  const orders = paginated(ordersData).items
+  const orderPage = paginated(ordersData)
+  const orders = orderPage.items
   const orderRows = orders.map((item) => {
     const pending = String(item.status).toUpperCase() === 'PENDING'
     return `<tr><td><div class="cell-title"><strong>${escapeHTML(item.out_trade_no || `订单 #${item.id}`)}</strong><span>${escapeHTML(paymentMethodLabel(PAYMENT_METHOD_ALIASES[item.payment_type] || item.payment_type, item.payment_type))}</span></div></td><td><div class="cell-title"><strong>${escapeHTML(gatewayMoney(item.pay_amount ?? item.amount, item.currency || 'CNY'))}</strong><span>到账 ${money(item.amount)}</span></div></td><td><span class="status-badge ${escapeHTML(paymentStatusClass(item.status))}">${escapeHTML(paymentStatusLabel(item.status))}</span></td><td>${escapeHTML(dateTime(item.created_at))}</td><td><div class="table-actions">${pending && item.out_trade_no ? `<button class="icon-button" data-action="verify-payment-order" data-order-no="${escapeHTML(item.out_trade_no)}" title="查询支付状态" aria-label="查询支付状态"><i data-lucide="refresh-cw"></i></button>` : ''}${pending ? `<button class="icon-button" data-action="cancel-payment-order" data-id="${escapeHTML(item.id)}" title="取消订单" aria-label="取消订单"><i data-lucide="x"></i></button>` : ''}</div></td></tr>`
@@ -1204,7 +1209,7 @@ async function renderBilling() {
         </aside>
       </form>` : empty('wallet-cards', '在线充值暂不可用', paymentConfig?.unavailable_reason || (paymentConfig?.payment_enabled === false ? 'AIHub 当前未启用在线支付。' : checkout?.balance_disabled ? 'AIHub 当前关闭了余额充值。' : 'AIHub 当前没有可用支付渠道。'))}
     </section>
-    <section class="panel"><div class="panel-header"><div><h2>订单记录</h2><p>支付与退款状态</p></div></div>${orderRows ? `<div class="data-table-wrap"><table class="data-table payment-orders"><thead><tr><th>订单号</th><th>金额</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${orderRows}</tbody></table></div>` : empty('receipt', '暂无订单', '创建充值订单后会显示在这里。')}</section>
+    <section class="panel"><div class="panel-header payment-orders-header"><div><h2>订单记录</h2><p>支付与退款状态</p></div><div class="order-filter-controls"><select name="order-status" aria-label="订单状态"><option value="">全部状态</option>${['PENDING','COMPLETED','FAILED','REFUNDED'].map((status) => `<option value="${status}" ${orderState.status === status ? 'selected' : ''}>${paymentStatusLabel(status)}</option>`).join('')}</select><select name="order-page-size" aria-label="每页数量">${[20,50,100].map((size) => `<option value="${size}" ${orderState.pageSize === size ? 'selected' : ''}>${size} / 页</option>`).join('')}</select></div></div>${orderRows ? `<div class="data-table-wrap"><table class="data-table payment-orders"><thead><tr><th>订单号</th><th>金额</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${orderRows}</tbody></table></div>` : empty('receipt', '暂无订单', '创建充值订单后会显示在这里。')}<div class="pagination-bar"><span>共 ${number(orderPage.total)} 条</span><div class="pagination-controls"><button class="icon-button" data-action="orders-prev" aria-label="上一页" ${orderState.page <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button><strong>${number(orderState.page)} / ${number(orderPage.pages || 1)}</strong><button class="icon-button" data-action="orders-next" aria-label="下一页" ${orderState.page >= (orderPage.pages || 1) ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button></div></div></section>
   </div>`
   icons($('#content'))
   updateRechargePreview()
@@ -1497,22 +1502,25 @@ async function renderAccount() {
 }
 
 function renderGuide() {
-  const sections = [
-    { number: '01', title: 'Node.js 环境安装', icon: 'square-terminal', body: '<p>Claude Code、Codex 和 Gemini CLI 都可通过 npm 安装。建议使用 Node.js 20 LTS 或更高版本，安装后重新打开终端。</p>', code: 'node -v\nnpm -v', link: ['https://nodejs.org/en/download', '下载 Node.js LTS'] },
-    { number: '02', title: 'API 密钥高级功能', icon: 'key-round', body: '<p>创建或编辑密钥时可同时设置最大倍率、倍率变动邮件、三种故障转移策略、候选或排除分组，以及自然回切、积极回切和不自动回切。</p><p>转移依据真实分组样本、供应商大厅探测与满足前两项后的主动探测，并由 AIHub 服务端执行切换。</p>', action: ['keys', '管理 API Key'] },
-    { number: '03', title: 'CCS 一键导入', icon: 'import', body: '<p>推荐先安装 CC Switch，再从 AIHub 密钥列表发起一键导入。写入前请核对应用类型、API 端点、模型和密钥掩码。</p>', link: ['https://github.com/farion1231/cc-switch/releases/latest', '下载 CC Switch'] },
-    { number: '04', title: 'Claude Code 配置教程', icon: 'bot', body: '<p>安装 Anthropic 官方 CLI，并在 <code>~/.claude/settings.json</code> 中把请求地址与认证令牌指向 AIHub。配置文件包含明文 Key，请勿提交或分享。</p>', code: 'npm install -g @anthropic-ai/claude-code\nclaude --version\n\nANTHROPIC_BASE_URL=https://api.aihub.top\nANTHROPIC_AUTH_TOKEN=<AIHUB_API_KEY>' },
-    { number: '05', title: 'Codex 配置教程', icon: 'code-2', body: '<p>通过自定义模型提供商连接 AIHub 的 OpenAI 兼容接口。配置保存在 <code>~/.codex/config.toml</code> 和 <code>~/.codex/auth.json</code>。</p>', code: 'npm install -g @openai/codex@latest\ncodex --version\n\nbase_url = "https://aihub.top/v1"\nexperimental_bearer_token = "<AIHUB_API_KEY>"' },
-    { number: '06', title: 'Gemini CLI 配置教程', icon: 'sparkles', body: '<p>使用 Gemini API Key 鉴权模式，把 <code>~/.gemini/.env</code> 中的网关地址设置为 AIHub。</p>', code: 'npm install -g @google/gemini-cli\ngemini --version\n\nGEMINI_API_KEY=<AIHUB_API_KEY>\nGOOGLE_GEMINI_BASE_URL=https://api.aihub.top' },
-    { number: '07', title: 'AIHubRouter 自动路由工具', icon: 'route', body: '<p>AIHubRouter 是跨平台开源工具，可按倍率和首 Token 速度调整 Key 分组。它只调用 AIHub API，不代理模型请求，也不修改本地 CLI 配置。</p>', code: 'aihub-router route --once --dry-run --json\naihub-router watch --interval 60 --json', link: ['https://github.com/OnRightPath/AIHubRouter', '查看 AIHubRouter'] },
-    { number: '08', title: '社区工具推荐', icon: 'users-round', body: '<p>站点社区还提供 Windows 状态客户端、AIHub Smart Group、LLM Retry Proxy、QQ 群机器人和 CC Switch 社区版。能力与版本以各项目仓库为准。</p>', link: ['https://aihub.top/tutorial#community-tools', '查看社区工具'] },
+  const platform = state.guidePlatform
+  const platformName = { windows: 'Windows', macos: 'macOS', linux: 'Linux / WSL' }[platform]
+  const home = platform === 'windows' ? '%USERPROFILE%' : '~'
+  const nodeInstall = platform === 'windows' ? 'winget install OpenJS.NodeJS.LTS' : platform === 'macos' ? 'brew install node@20' : 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash\nnvm install --lts'
+  const chapters = [
+    { number: '01', title: 'Node.js 环境安装', icon: 'square-terminal', steps: [{ title: `${platformName} 安装 Node.js 20 LTS`, code: nodeInstall }, { title: '重新打开终端', body: '安装完成后关闭并重新打开终端。' }, { title: '验证环境', code: 'node -v\nnpm -v' }], links: [['https://nodejs.org/en/download', 'Node.js 下载']] },
+    { number: '02', title: 'API 密钥高级功能', icon: 'key-round', images: [['https://aihub.top/assets/aihub-key-advanced-options-B3zINWYy.png', 'AIHub API Key 高级选项']], steps: [{ title: '创建或编辑密钥', body: '在 API Key 页面打开高级设置。' }, { title: '设置倍率与故障转移', body: '配置最高倍率、候选或排除分组，以及自然回切、积极回主或不自动回切。' }, { title: '保存服务端策略', body: '转移依据真实使用样本、供应商大厅探测和主动探测，由 AIHub 服务端执行切换。' }], route: ['keys', '管理 API Key'] },
+    { number: '03', title: 'CCS 一键导入', icon: 'import', images: [['https://aihub.top/assets/aihub-key-import-ccs-C1yNkU71.png', 'AIHub 导入 CC Switch'], ['https://aihub.top/assets/cc-switch-import-confirmation-95IsQJIy.png', 'CC Switch 导入确认']], steps: [{ title: '安装 CC Switch', body: '下载并安装当前平台版本。' }, { title: '从 AIHub 发起导入', body: '在密钥操作中选择客户端配置。' }, { title: '核对配置', body: '确认密钥掩码、端点、模型和应用类型，不要分享包含 Key 的深链接。' }, { title: '启用供应商', body: '确认后在 CC Switch 中启用导入项。' }], links: [['https://github.com/farion1231/cc-switch/releases/latest', '下载 CC Switch']] },
+    { number: '04', title: 'Claude Code 配置教程', icon: 'bot', steps: [{ title: '安装 Claude Code', code: 'npm install -g @anthropic-ai/claude-code' }, { title: `写入 ${home}\\.claude\\settings.json`, code: '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://api.aihub.top",\n    "ANTHROPIC_AUTH_TOKEN": "<AIHUB_API_KEY>"\n  }\n}' }, { title: '启动', code: 'claude' }], links: [['https://docs.anthropic.com/en/docs/claude-code/getting-started', 'Claude Code 文档']] },
+    { number: '05', title: 'Codex 配置教程', icon: 'code-2', steps: [{ title: '安装 Codex CLI', code: 'npm install -g @openai/codex@latest' }, { title: `写入 ${home}\\.codex\\config.toml`, code: 'model_provider = "aihub"\n[model_providers.aihub]\nbase_url = "https://aihub.top/v1"\nwire_api = "responses"\nrequires_openai_auth = true' }, { title: `写入 ${home}\\.codex\\auth.json`, code: '{\n  "OPENAI_API_KEY": "<AIHUB_API_KEY>"\n}' }], links: [['https://learn.chatgpt.com/docs/config-file/config-basic', 'Codex 配置文档']] },
+    { number: '06', title: 'Gemini CLI 配置教程', icon: 'sparkles', steps: [{ title: '安装 Gemini CLI', code: 'npm install -g @google/gemini-cli' }, { title: `写入 ${home}\\.gemini\\.env`, code: 'GEMINI_API_KEY=<AIHUB_API_KEY>\nGOOGLE_GEMINI_BASE_URL=https://api.aihub.top\nGEMINI_MODEL=gpt-5.6-sol' }, { title: '启动并选择 API Key', code: 'gemini' }], links: [['https://github.com/google-gemini/gemini-cli', 'Gemini CLI']] },
+    { number: '07', title: 'AIHubRouter 自动路由工具', icon: 'route', steps: [{ title: `下载 ${platformName} 版本`, body: 'Windows、Linux、macOS x64 与 ARM64 均有对应版本。' }, { title: '预览并执行一次', code: 'aihub-router route --once --dry-run --json\naihub-router route --once --json' }, { title: '每 60 秒监测', code: 'aihub-router watch --interval 60 --json' }], body: 'Economy、Balanced、Speed 三种权重只调整 Key 分组，不代理模型请求，也不修改本地 CLI 配置。', links: [['https://github.com/OnRightPath/AIHubRouter/releases/latest', '下载 AIHubRouter']] },
   ]
-  const cards = sections.map((section) => {
-    const code = section.code ? `<div class="guide-code"><pre><code>${escapeHTML(section.code)}</code></pre><button class="icon-button" data-action="copy-guide-code" title="复制命令" aria-label="复制命令"><i data-lucide="copy"></i></button></div>` : ''
-    const action = section.action ? `<button class="secondary-button" data-route-jump="${section.action[0]}"><i data-lucide="arrow-up-right"></i>${section.action[1]}</button>` : section.link ? `<button class="secondary-button" data-action="open-guide-link" data-url="${escapeHTML(section.link[0])}"><i data-lucide="external-link"></i>${section.link[1]}</button>` : ''
-    return `<article class="guide-section"><header><span class="guide-number">${section.number}</span><div><h2><i data-lucide="${section.icon}"></i>${section.title}</h2></div></header><div class="guide-section-body">${section.body}${code}${action}</div></article>`
-  }).join('')
-  $('#content').innerHTML = `<div class="page-stack guide-page"><section class="guide-hero"><div><p class="eyebrow">AIHUB DESKTOP · USER GUIDE</p><h2>从环境准备到自动路由</h2><p>这份教程对应当前 1.1.0 桌面端，并同步 AIHub 站点当前八章结构。示例模型与工具版本可能随站点更新。</p></div><span class="status-badge active">v${APP_VERSION}</span></section><div class="guide-grid">${cards}</div><section class="panel guide-note"><div class="panel-body"><i data-lucide="shield-check"></i><div><strong>接口边界</strong><p>桌面端只通过普通用户接口访问 AIHub，拒绝管理员路径。API Key 的故障转移策略由 AIHub 服务端执行切换；桌面端不保存号池，也不代理模型请求。</p></div></div></section></div>`
+  const codeBlock = (value) => `<div class="guide-code"><pre><code>${escapeHTML(value)}</code></pre><button class="icon-button" data-action="copy-guide-code" title="复制" aria-label="复制"><i data-lucide="copy"></i></button></div>`
+  const linkButton = ([url, label]) => `<button class="secondary-button" data-action="open-guide-link" data-url="${escapeHTML(url)}"><i data-lucide="external-link"></i>${escapeHTML(label)}</button>`
+  const cards = chapters.map((chapter) => `<article class="guide-section"><header><span class="guide-number">${chapter.number}</span><h2><i data-lucide="${chapter.icon}"></i>${chapter.title}</h2></header><div class="guide-section-body">${(chapter.images || []).map(([url, alt]) => `<img class="guide-image" src="${escapeHTML(url)}" alt="${escapeHTML(alt)}" />`).join('')}${chapter.steps.map((item, index) => `<div class="guide-step"><span>${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHTML(item.title)}</strong>${item.body ? `<p>${escapeHTML(item.body)}</p>` : ''}${item.code ? codeBlock(item.code) : ''}</div></div>`).join('')}${chapter.body ? `<p>${escapeHTML(chapter.body)}</p>` : ''}<div class="button-row">${(chapter.links || []).map(linkButton).join('')}${chapter.route ? `<button class="secondary-button" data-route-jump="${chapter.route[0]}"><i data-lucide="arrow-up-right"></i>${chapter.route[1]}</button>` : ''}</div></div></article>`).join('')
+  const community = [['AIHUB_check_api','https://github.com/issunmihaichi/AIHUB_check_api'],['AIHub Smart Group','https://github.com/jwwsjlm/AIHub-Smart-Group'],['LLM Retry Proxy','https://github.com/momijineko/llm-retry-proxy'],['AIHUB QQ 群机器人',''],['CC Switch 社区版','https://github.com/jiaxuan1101/cc-switch/releases']].map(([name, url]) => `<div class="guide-community"><strong>${escapeHTML(name)}</strong>${url ? linkButton([url, '查看项目']) : '<span class="muted">社区群内提供</span>'}</div>`).join('')
+  const platformControls = [['windows','Windows'],['macos','macOS'],['linux','Linux / WSL']].map(([value, label]) => `<button data-guide-platform="${value}" class="${platform === value ? 'active' : ''}">${label}</button>`).join('')
+  $('#content').innerHTML = `<div class="page-stack guide-page"><section class="guide-hero"><div><p class="eyebrow">AIHUB DESKTOP · USER GUIDE</p><h2>从环境准备到自动路由</h2><p>这份教程对应当前 1.1.0 桌面端，并同步 AIHub 站点当前八章结构。</p></div><div class="segmented guide-platforms">${platformControls}</div></section><div class="guide-grid full-guide">${cards}<article class="guide-section"><header><span class="guide-number">08</span><h2><i data-lucide="users-round"></i>社区工具推荐</h2></header><div class="guide-section-body guide-community-grid">${community}</div></article></div><section class="panel guide-note"><div class="panel-body"><i data-lucide="shield-check"></i><div><strong>接口边界</strong><p>桌面端只通过普通用户接口访问 AIHub，拒绝管理员路径。API Key 的故障转移策略由 AIHub 服务端执行切换；桌面端不保存号池，也不代理模型请求。</p></div></div></section></div>`
   icons($('#content'))
 }
 
@@ -1829,7 +1837,7 @@ function confirmModal(title, message, confirmAction, danger = false) {
 }
 
 async function handleContentClick(event) {
-  const target = event.target.closest('[data-action], [data-route-jump], [data-dashboard-route], [data-period-value], [data-provider-tab], [data-provider-window], [data-provider-sort], [data-provider-metric], [data-client-tab], [data-log-mode]')
+  const target = event.target.closest('[data-action], [data-route-jump], [data-dashboard-route], [data-guide-platform], [data-period-value], [data-provider-tab], [data-provider-window], [data-provider-sort], [data-provider-metric], [data-client-tab], [data-log-mode]')
   if (!target) return
   if (target.dataset.routeJump) return navigate(target.dataset.routeJump)
   if (target.dataset.dashboardRoute) {
@@ -1839,6 +1847,10 @@ async function handleContentClick(event) {
       return navigate('logs')
     }
     return navigate(route)
+  }
+  if (target.dataset.guidePlatform) {
+    state.guidePlatform = target.dataset.guidePlatform
+    return renderGuide()
   }
   if (target.dataset.periodValue) {
     state.usagePeriod = target.dataset.periodValue
@@ -1920,6 +1932,8 @@ async function handleContentClick(event) {
     return confirmModal('取消充值订单', '确定取消这笔尚未支付的订单？已经支付的订单不会被取消。', 'confirm-cancel-payment-order')
   }
   if (action === 'usage-detail') return openLogDetail(target.dataset.id)
+  if (action === 'orders-prev') { state.orders.page = Math.max(1, state.orders.page - 1); return renderBilling() }
+  if (action === 'orders-next') { state.orders.page += 1; return renderBilling() }
   if (action === 'usage-prev') { state.usageAnalytics.page = Math.max(1, state.usageAnalytics.page - 1); return renderUsage() }
   if (action === 'usage-next') { state.usageAnalytics.page += 1; return renderUsage() }
   if (action === 'usage-region-refresh-all') {
@@ -2375,6 +2389,18 @@ async function handleContentSubmit(event) {
 }
 
 async function handleContentChange(event) {
+  if (event.target.name === 'order-status') {
+    state.orders.status = event.target.value
+    state.orders.page = 1
+    await renderBilling()
+    return
+  }
+  if (event.target.name === 'order-page-size') {
+    state.orders.pageSize = Number(event.target.value) || 20
+    state.orders.page = 1
+    await renderBilling()
+    return
+  }
   if (event.target.id !== 'account-avatar-input') return
   const file = event.target.files?.[0]
   if (!file) return

@@ -43,7 +43,7 @@ async function run() {
           balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0,
           recharge_fee_rate: 2, help_text: '', help_image_url: '', stripe_publishable_key: '',
         }
-        if (route.startsWith('/payment/orders/my')) return { items: [], total: 0 }
+        if (route.startsWith('/payment/orders/my')) return { items: [{ id: 88, out_trade_no: 'ORDER-88', amount: 12, currency: 'CNY', status: 'PENDING', created_at: '2026-07-28T00:00:00Z' }], total: 40, pages: 2 }
         if (route === '/payment/orders' && options.method === 'POST') return {
           order_id: 77, amount: options.body.amount, pay_amount: 20.4, currency: 'CNY', fee_rate: 2,
           qr_code: 'https://aihub.top/pay/mock-order-77', out_trade_no: 'DESKTOP-MOCK-77',
@@ -61,6 +61,13 @@ async function run() {
       await navigate('billing')
     })
     await page.waitForSelector('#recharge-form')
+    await page.waitForSelector('[name="order-status"]')
+    await page.locator('[data-action="orders-next"]').click()
+    await page.waitForFunction(() => window.__paymentCalls.some((call) => call.route.includes('/payment/orders/my?page=2&page_size=20')))
+    await page.selectOption('[name="order-page-size"]', '50')
+    await page.waitForFunction(() => window.__paymentCalls.some((call) => call.route.includes('/payment/orders/my?page=1&page_size=50')))
+    await page.selectOption('[name="order-status"]', 'COMPLETED')
+    await page.waitForFunction(() => window.__paymentCalls.some((call) => call.route.includes('/payment/orders/my?page=1&page_size=50&status=COMPLETED')))
     const methods = await page.locator('.payment-method').count()
     await page.fill('#recharge-amount', '20')
     await page.click('[data-method="wxpay"]')
