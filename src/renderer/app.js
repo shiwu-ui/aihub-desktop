@@ -17,6 +17,7 @@ const state = {
   usagePeriod: 'month',
   dashboardChart: null,
   logs: { page: 1, pageSize: 20, mode: 'usage', filters: {} },
+  invoices: { eligiblePage: 1, applicationsPage: 1, pageSize: 20, eligibleOrders: [] },
   providerWindow: '6h',
   providerCharts: [],
   announcements: [],
@@ -148,6 +149,24 @@ function normalizeInvoiceEmails(value) {
   if (!emails.length || emails.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return ''
   const normalized = emails.join(', ')
   return new TextEncoder().encode(normalized).length <= 255 ? normalized : ''
+}
+
+function canApplyForInvoice(order) {
+  return order?.eligible === true && order?.applied !== true
+}
+
+function invoiceOrderReason(order) {
+  const rawReason = ['eligibility_reason', 'ineligible_reason', 'reason', 'message']
+    .map((field) => order?.[field])
+    .find((value) => typeof value === 'string' && value.trim())
+  if (rawReason === 'amount_below_300') return '金额不足 300'
+  return rawReason?.trim() || '暂不符合申请条件'
+}
+
+function invoiceOrderState(order) {
+  if (order?.applied === true) return ['applied', '已申请']
+  if (order?.eligible === true) return ['eligible', '申请开票']
+  return ['ineligible', invoiceOrderReason(order)]
 }
 
 function cleanupPaymentPolling(clearBilling = false) {
@@ -535,23 +554,40 @@ function failoverProbeLabel(value) {
   return String(value || '-')
 }
 
-function failoverRows(items) {
+function failoverSummary(item) {
   const strategyLabels = { manual: '自选分组', lowest_rate: '最低倍率优先', fastest: '最快响应优先' }
   const recoveryLabels = { sticky: '保持当前', prefer_primary: '积极回主', manual_only: '仅手动切换' }
   const reasonLabels = { upstream_503: '上游返回 503', timeout: '请求超时', unavailable: '分组不可用' }
-  return items.map((item) => `<tr>
-    <td><div class="cell-title"><strong>${escapeHTML(item.api_key_name || item.api_key?.name || `Key #${item.api_key_id}`)}</strong><span>${escapeHTML(dateTime(item.created_at))}</span></div></td>
-    <td>${escapeHTML(item.model || '-')}</td>
-    <td>${escapeHTML(item.source_group_name || item.source_group?.name || item.source_group_id || '-')}</td>
-    <td>${escapeHTML(item.target_group_name || item.target_group?.name || item.target_group_id || '-')}</td>
-    <td>${number(item.source_multiplier, 2)}</td>
-    <td>${number(item.target_multiplier, 2)}</td>
-    <td>${escapeHTML(failoverLabel(item.strategy, strategyLabels))}</td>
-    <td>${escapeHTML(failoverLabel(item.recovery_mode, recoveryLabels))}</td>
-    <td>${escapeHTML(failoverLabel(item.reason, reasonLabels))}</td>
-    <td>${escapeHTML(failoverProbeLabel(item.health_probe))}</td>
-    <td>${escapeHTML(item.upstream_status_code ?? '-')}</td>
-  </tr>`).join('')
+  const healthLabels = { unavailable: '健康异常' }
+  const sourceGroup = item.source_group_name || item.source_group?.name || item.source_group_id || '-'
+  const targetGroup = item.target_group_name || item.target_group?.name || item.target_group_id || '-'
+  return {
+    apiKey: item.api_key_name || item.api_key?.name || `Key #${item.api_key_id}`,
+    model: item.model || '-',
+    groupSwitch: `${sourceGroup} → ${targetGroup}`,
+    multiplierChange: `${number(item.source_multiplier, 2)} → ${number(item.target_multiplier, 2)}`,
+    reason: failoverLabel(item.reason, reasonLabels),
+    strategy: failoverLabel(item.strategy, strategyLabels),
+    recoveryMode: failoverLabel(item.recovery_mode, recoveryLabels),
+    health: failoverLabel(item.health_class, healthLabels),
+    probe: failoverProbeLabel(item.health_probe),
+    status: item.upstream_status_code ?? '-',
+    time: dateTime(item.created_at),
+  }
+}
+
+function failoverRows(items) {
+  return items.map((item) => {
+    const summary = failoverSummary(item)
+    return `<tr class="failover-log-row" data-action="log-detail" data-id="${escapeHTML(item.id)}" tabindex="0">
+      <td data-label="API 密钥"><div class="cell-title"><strong>${escapeHTML(summary.apiKey)}</strong><span>${escapeHTML(`Key #${item.api_key_id || '-'}`)}</span></div></td>
+      <td data-label="模型">${escapeHTML(summary.model)}</td>
+      <td data-label="分组切换">${escapeHTML(summary.groupSwitch)}</td>
+      <td data-label="倍率变化">${escapeHTML(summary.multiplierChange)}</td>
+      <td data-label="切换原因"><div class="failover-reason"><strong>${escapeHTML(summary.reason)}</strong><span>${escapeHTML(`策略：${summary.strategy} · 恢复：${summary.recoveryMode}`)}</span><span>${escapeHTML(`健康：${summary.health} · 探测：${summary.probe} · 上游：${summary.status}`)}</span></div></td>
+      <td data-label="时间">${escapeHTML(summary.time)}</td>
+    </tr>`
+  }).join('')
 }
 
 function csvCell(value) {
@@ -625,7 +661,7 @@ async function renderLogs() {
     </tr>`
   }).join('')
   const table = isFailover
-    ? (logs.items.length ? `<div class="data-table-wrap failover-log-table"><table class="data-table"><thead><tr><th>API Key / 时间</th><th>模型</th><th>主分组</th><th>备用分组</th><th>主倍率</th><th>备倍率</th><th>策略</th><th>恢复</th><th>原因</th><th>探测</th><th>状态</th></tr></thead><tbody>${failoverRows(logs.items)}</tbody></table></div>` : empty('git-branch', '暂无故障转移记录', '发生分组故障转移后，会在这里保留审计记录。'))
+    ? (logs.items.length ? `<div class="data-table-wrap failover-log-table"><table class="data-table"><thead><tr><th>API 密钥</th><th>模型</th><th>分组切换</th><th>倍率变化</th><th>切换原因</th><th>时间</th></tr></thead><tbody>${failoverRows(logs.items)}</tbody></table></div>` : empty('git-branch', '暂无故障转移记录', '发生分组故障转移后，会在这里保留审计记录。'))
     : (rows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>时间 / 请求 ID</th><th>模型</th><th>API Key</th><th>分组</th><th>Token</th><th>消费</th><th>耗时</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : empty('list-x', '没有匹配的调用', '调整筛选条件或产生新的 API 请求后再查看。'))
   $('#content').innerHTML = `<div class="page-stack">
     <div class="page-toolbar"><div class="toolbar-copy"><h2>个人调用记录</h2><p>仅包含你的请求，不含管理员审计与上游账号信息。</p></div><div class="button-row"><button class="secondary-button" data-action="reset-log-filters"><i data-lucide="rotate-ccw"></i>重置</button>${isFailover ? '' : '<button class="primary-button" data-action="export-logs"><i data-lucide="download"></i>导出 CSV</button>'}</div></div>
@@ -839,6 +875,19 @@ async function openLogDetail(id) {
   </div>`, '<button class="primary-button" data-action="close-modal">完成</button>')
 }
 
+function failoverDetailValue(value) {
+  if (value == null || value === '') return '-'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function openFailoverDetail(id) {
+  const item = state.currentLogs.find((log) => String(log.id) === String(id))
+  if (!item) throw new Error('故障转移记录已更新，请刷新后重试')
+  const rows = Object.entries(item).map(([field, value]) => `<div class="detail-row"><span>${escapeHTML(field)}</span><strong>${escapeHTML(failoverDetailValue(value))}</strong></div>`).join('')
+  openModal('故障转移详情', `<div class="detail-list failover-detail-list">${rows}</div>`, '<button class="primary-button" data-action="close-modal">关闭</button>')
+}
+
 function redeemHistoryTitle(item) {
   if (item.type === 'balance') return '余额充值（兑换）'
   if (item.type === 'concurrency') return '并发增加（兑换）'
@@ -924,32 +973,37 @@ async function renderBilling() {
   }
 }
 
+function invoicePagination(page, pages, previousAction, nextAction) {
+  return `<div class="pagination-bar"><span>第 ${number(page)} / ${number(pages || 1)} 页</span><div class="pagination-controls"><button class="icon-button toolbar-button" data-action="${previousAction}" ${page <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button><button class="icon-button toolbar-button" data-action="${nextAction}" ${page >= (pages || 1) ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button></div></div>`
+}
+
+function openInvoiceApplication(orderId) {
+  const order = state.invoices.eligibleOrders.find((item) => String(item.id) === String(orderId))
+  if (!canApplyForInvoice(order)) throw new Error('该订单暂不可申请发票')
+  const orderOptions = state.invoices.eligibleOrders.filter(canApplyForInvoice).map((item) => `<option value="${escapeHTML(item.id)}" ${String(item.id) === String(order.id) ? 'selected' : ''}>#${escapeHTML(item.out_trade_no || item.id)} · ${escapeHTML(gatewayMoney(item.amount, item.currency || 'CNY'))}</option>`).join('')
+  openModal('申请发票', `<form id="invoice-application-form" class="form-grid"><label class="span-two"><span>充值订单</span><select name="payment_order_id" required><option value="">请选择符合条件的订单</option>${orderOptions}</select></label><label class="span-two"><span>公司 / 个人抬头</span><input name="company_title" maxlength="200" required /></label><label class="span-two"><span>税号</span><input name="tax_number" maxlength="64" required /></label><label class="span-two"><span>收票邮箱</span><input name="email" inputmode="email" maxlength="255" placeholder="多个邮箱可用逗号、分号或空格分隔" required /><small>提交前会统一为英文逗号分隔，最长 255 字节。</small></label><div class="span-two button-row"><button type="submit" class="primary-button"><i data-lucide="send"></i>提交发票申请</button></div></form>`, '<button class="secondary-button" data-action="close-modal">取消</button>')
+}
+
 async function renderInvoices() {
+  const invoiceState = state.invoices
   const [eligibleData, applicationsData] = await Promise.all([
-    request('/invoices/eligible-orders'),
-    request('/invoices/my'),
+    request(`/invoices/eligible-orders?${queryString({ page: invoiceState.eligiblePage, page_size: invoiceState.pageSize })}`),
+    request(`/invoices/my?${queryString({ page: invoiceState.applicationsPage, page_size: invoiceState.pageSize })}`),
   ])
-  const eligibleOrders = paginated(eligibleData).items
-  const applications = paginated(applicationsData).items
-  const orderOptions = eligibleOrders.map((order) => `<option value="${escapeHTML(order.id)}">#${escapeHTML(order.out_trade_no || order.id)} · ${escapeHTML(gatewayMoney(order.amount, order.currency || 'CNY'))} · ${escapeHTML(dateTime(order.completed_at || order.created_at))}</option>`).join('')
+  const eligible = paginated(eligibleData)
+  const applicationsDataPage = paginated(applicationsData)
+  const eligibleOrders = eligible.items
+  const applications = applicationsDataPage.items
+  state.invoices.eligibleOrders = eligibleOrders
+  const orderRows = eligibleOrders.map((order) => {
+    const [statusClass, statusLabel] = invoiceOrderState(order)
+    return `<tr><td><div class="cell-title"><strong>#${escapeHTML(order.out_trade_no || order.id)}</strong><span>${escapeHTML(order.status || '-')}</span></div></td><td>${escapeHTML(gatewayMoney(order.amount, order.currency || 'CNY'))}</td><td>${escapeHTML(dateTime(order.completed_at || order.created_at))}</td><td><span class="status-badge ${statusClass}">${escapeHTML(statusLabel)}</span></td><td>${canApplyForInvoice(order) ? `<button class="secondary-button" data-action="invoice-apply-order" data-id="${escapeHTML(order.id)}">申请开票</button>` : '-'}</td></tr>`
+  }).join('')
   const applicationRows = applications.map((item) => {
     const processed = String(item.status || '').toLowerCase() === 'processed'
     return `<tr><td>#${escapeHTML(item.payment_order_id)}</td><td><div class="cell-title"><strong>${escapeHTML(item.company_title || '-')}</strong><span>${escapeHTML(item.tax_number || '-')}</span></div></td><td>${escapeHTML(item.email || '-')}</td><td><span class="status-badge ${processed ? 'active' : 'pending'}">${processed ? '已处理' : '待审核'}</span></td><td>${escapeHTML(dateTime(item.created_at))}</td></tr>`
   }).join('')
-  $('#content').innerHTML = `<div class="page-stack invoice-page">
-    <section id="invoice-rules" class="invoice-rules"><div class="invoice-rules-icon"><i data-lucide="file-check-2"></i></div><div><p class="eyebrow">申请规则</p><h2>充值满 300，可申请研发服务发票</h2><p>单笔已完成充值达到 300 方可申请，同一订单不能重复提交。发票内容为“研发服务”，预计 1 - 3 个工作日发送到收票邮箱。</p></div></section>
-    <div class="two-column invoice-columns">
-      <section class="panel"><div class="panel-header"><div><h2>提交申请</h2><p>支持填写多个收票邮箱</p></div></div><div class="panel-body">${eligibleOrders.length ? `<form id="invoice-application-form" class="form-grid">
-        <label class="span-two"><span>充值订单</span><select name="payment_order_id" required><option value="">请选择符合条件的订单</option>${orderOptions}</select></label>
-        <label class="span-two"><span>公司 / 个人抬头</span><input name="company_title" maxlength="200" required /></label>
-        <label class="span-two"><span>税号</span><input name="tax_number" maxlength="64" required /></label>
-        <label class="span-two"><span>收票邮箱</span><input name="email" inputmode="email" maxlength="255" placeholder="多个邮箱可用逗号、分号或空格分隔" required /><small>提交前会统一为英文逗号分隔，最长 255 字节。</small></label>
-        <div class="span-two button-row"><button type="submit" class="primary-button"><i data-lucide="send"></i>提交发票申请</button></div>
-      </form>` : empty('receipt-text', '暂无可申请订单', '单笔已完成充值达到 300 后，可在这里提交发票申请。')}</div></section>
-      <section class="panel invoice-delivery"><div class="panel-header"><div><h2>邮件交付</h2><p>站内不保存发票文件</p></div></div><div class="panel-body detail-list"><div class="detail-row"><span>开票内容</span><strong>研发服务</strong></div><div class="detail-row"><span>预计时效</span><strong>1 - 3 个工作日</strong></div><div class="detail-row"><span>交付方式</span><strong>发送到收票邮箱</strong></div></div></section>
-    </div>
-    <section id="invoice-applications" class="panel"><div class="panel-header"><div><h2>申请记录</h2><p>${number(applications.length)} 条记录</p></div></div>${applicationRows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>订单</th><th>抬头 / 税号</th><th>邮箱</th><th>状态</th><th>申请时间</th></tr></thead><tbody>${applicationRows}</tbody></table></div>` : empty('clock-3', '暂无申请记录', '提交发票申请后，处理状态会显示在这里。')}</section>
-  </div>`
+  $('#content').innerHTML = `<div class="page-stack invoice-page"><section id="invoice-rules" class="invoice-rules"><div class="invoice-rules-icon"><i data-lucide="file-check-2"></i></div><div><p class="eyebrow">申请规则</p><h2>充值满 300，可申请研发服务发票</h2><p>单笔已完成充值达到 300 方可申请，同一订单不能重复提交。发票内容为“研发服务”，预计 1 - 3 个工作日发送到收票邮箱。</p></div></section><section id="invoice-orders" class="panel"><div class="panel-header"><div><h2>可开票订单</h2><p>${number(eligible.total)} 条订单</p></div></div>${orderRows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>订单</th><th>金额</th><th>完成时间</th><th>状态</th><th></th></tr></thead><tbody>${orderRows}</tbody></table></div>${invoicePagination(invoiceState.eligiblePage, eligible.pages, 'invoice-orders-prev', 'invoice-orders-next')}` : empty('receipt-text', '暂无订单记录', '完成充值后，订单会显示在这里。')}</section><section class="panel invoice-delivery"><div class="panel-header"><div><h2>邮件交付</h2><p>站内不保存发票文件</p></div></div><div class="panel-body detail-list"><div class="detail-row"><span>开票内容</span><strong>研发服务</strong></div><div class="detail-row"><span>预计时效</span><strong>1 - 3 个工作日</strong></div><div class="detail-row"><span>交付方式</span><strong>发送到收票邮箱</strong></div></div></section><section id="invoice-applications" class="panel"><div class="panel-header"><div><h2>申请记录</h2><p>${number(applicationsDataPage.total)} 条记录</p></div></div>${applicationRows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>订单</th><th>抬头 / 税号</th><th>邮箱</th><th>状态</th><th>申请时间</th></tr></thead><tbody>${applicationRows}</tbody></table></div>${invoicePagination(invoiceState.applicationsPage, applicationsDataPage.pages, 'invoice-applications-prev', 'invoice-applications-next')}` : empty('clock-3', '暂无申请记录', '提交发票申请后，处理状态会显示在这里。')}</section></div>`
   icons($('#content'))
 }
 
@@ -1536,7 +1590,12 @@ async function handleContentClick(event) {
     state.pendingPaymentOrderId = target.dataset.id
     return confirmModal('取消充值订单', '确定取消这笔尚未支付的订单？已经支付的订单不会被取消。', 'confirm-cancel-payment-order')
   }
-  if (action === 'log-detail') return openLogDetail(target.dataset.id)
+  if (action === 'log-detail') return state.logs.mode === 'failover' ? openFailoverDetail(target.dataset.id) : openLogDetail(target.dataset.id)
+  if (action === 'invoice-apply-order') return openInvoiceApplication(target.dataset.id)
+  if (action === 'invoice-orders-prev') { state.invoices.eligiblePage = Math.max(1, state.invoices.eligiblePage - 1); return renderInvoices() }
+  if (action === 'invoice-orders-next') { state.invoices.eligiblePage += 1; return renderInvoices() }
+  if (action === 'invoice-applications-prev') { state.invoices.applicationsPage = Math.max(1, state.invoices.applicationsPage - 1); return renderInvoices() }
+  if (action === 'invoice-applications-next') { state.invoices.applicationsPage += 1; return renderInvoices() }
   if (action === 'use-provider-group') {
     return useProviderGroupModal(target.dataset.groupId, target.dataset.groupName, target.dataset.groupRate)
   }
@@ -1845,19 +1904,23 @@ async function handleContentSubmit(event) {
     }
     if (form.id === 'invoice-application-form') {
       const data = new FormData(form)
+      const paymentOrderId = Number(data.get('payment_order_id'))
+      const order = state.invoices.eligibleOrders.find((item) => Number(item.id) === paymentOrderId)
+      if (!canApplyForInvoice(order)) throw new Error('请选择可申请发票的订单')
       const email = normalizeInvoiceEmails(data.get('email'))
       if (!email) throw new Error('请输入有效的收票邮箱，多个邮箱可用逗号、分号或空格分隔')
       await request('/invoices', {
         method: 'POST',
         body: {
-          payment_order_id: Number(data.get('payment_order_id')),
+          payment_order_id: paymentOrderId,
           company_title: String(data.get('company_title')).trim(),
           tax_number: String(data.get('tax_number')).trim(),
           email,
         },
       })
       toast('发票申请已提交')
-      await navigate('invoices')
+      closeModal()
+      await renderInvoices()
       return
     }
     if (form.id === 'profile-form') {
@@ -1921,6 +1984,7 @@ $('#content').addEventListener('input', (event) => {
   if (event.target.id === 'recharge-amount') updateRechargePreview()
 })
 $('#modal-root').addEventListener('click', handleModalClick)
+$('#modal-root').addEventListener('submit', handleContentSubmit)
 $('#modal-root').addEventListener('change', (event) => {
   if (event.target.closest('#create-key-form')) syncKeyPolicyForm()
 })

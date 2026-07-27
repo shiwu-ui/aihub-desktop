@@ -1,5 +1,6 @@
 'use strict'
 
+const assert = require('node:assert/strict')
 const { _electron: electron } = require('playwright-core')
 const fs = require('node:fs/promises')
 const os = require('node:os')
@@ -115,21 +116,22 @@ async function run() {
       throw new Error(JSON.stringify({ expectedParams, lastCall }))
     }
 
-    const row = page.locator('.data-table tbody tr').filter({ hasText: 'Primary Group' }).first()
+    const headers = await page.locator('.failover-log-table thead th').allTextContents()
+    assert.deepEqual(headers, ['API 密钥', '模型', '分组切换', '倍率变化', '切换原因', '时间'])
+    const row = page.locator('.failover-log-table tbody tr').filter({ hasText: 'Primary Group' }).first()
     await row.waitFor()
     const rowText = await row.textContent()
     const expectedRowText = [
       'Codex Key',
       'gpt-5.6-sol',
-      'Primary Group',
-      'Fallback Group',
-      '0.02',
-      '0.03',
+      'Primary Group → Fallback Group',
+      '0.02 → 0.03',
       labels.lowestRate,
       labels.preferPrimary,
       labels.upstream503,
       labels.activeProbe,
       '503',
+      '健康异常',
     ]
     const missingRowText = expectedRowText.filter((text) => !rowText.includes(text))
     const overflow = await page.evaluate(() => {
@@ -139,10 +141,37 @@ async function run() {
         content: content.scrollWidth - content.clientWidth,
       }
     })
+    const screenshotDir = process.env.AIHUB_SCREENSHOT_DIR
+    if (screenshotDir) {
+      await fs.mkdir(screenshotDir, { recursive: true })
+      await page.screenshot({ path: path.join(screenshotDir, 'failover-audit-log.png'), fullPage: true })
+    }
 
     if (missingRowText.length || errors.length || overflow.body > 1 || overflow.content > 1) {
       throw new Error(JSON.stringify({ missingRowText, rowText, errors, overflow }))
     }
+    const requestsBeforeDetail = await page.evaluate(() => window.__failoverCalls.length)
+    await row.click()
+    const modal = page.locator('.modal')
+    await modal.waitFor()
+    const detailText = await modal.textContent()
+    ;['source_group_id', 'target_group_id', 'strategy', 'recovery_mode', 'reason', 'health_class', 'health_probe', 'upstream_status_code'].forEach((field) => assert.match(detailText, new RegExp(field)))
+    assert.match(detailText, /1/)
+    assert.match(detailText, /2/)
+    assert.equal(await page.evaluate(() => window.__failoverCalls.length), requestsBeforeDetail)
+    await page.locator('.modal-footer button[data-action="close-modal"]').click()
+
+    await page.setViewportSize({ width: 980, height: 680 })
+    const compact = await row.evaluate((element) => {
+      const cells = [...element.cells].map((cell) => Math.round(cell.getBoundingClientRect().top))
+      return { rows: new Set(cells).size, cells: cells.length }
+    })
+    const compactOverflow = await page.evaluate(() => {
+      const content = document.querySelector('#content')
+      return { body: document.documentElement.scrollWidth - document.documentElement.clientWidth, content: content.scrollWidth - content.clientWidth }
+    })
+    assert.deepEqual(compact, { rows: 2, cells: 6 })
+    assert.ok(compactOverflow.body <= 1 && compactOverflow.content <= 1, JSON.stringify({ compactOverflow }))
 
     console.log(JSON.stringify({
       ok: true,

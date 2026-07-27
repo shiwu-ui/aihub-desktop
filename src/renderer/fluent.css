@@ -247,7 +247,7 @@ textarea { min-height: 90px; resize: vertical; }
 .cell-title span { color: var(--muted); font-size: 9px; }
 .status-badge { display: inline-flex; align-items: center; gap: 5px; min-height: 20px; border: 1px solid color-mix(in srgb,var(--green) 30%,transparent); border-radius: 999px; padding: 2px 7px; background: color-mix(in srgb,var(--green) 10%,transparent); color: var(--green); font-size: 9px; font-weight: 650; }
 .status-badge::before { content:""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.status-badge.inactive,.status-badge.cancelled,.status-badge.expired,.status-badge.disabled { border-color: var(--line); background: var(--surface-hover); color: var(--muted); }
+.status-badge.inactive,.status-badge.cancelled,.status-badge.expired,.status-badge.disabled,.status-badge.applied,.status-badge.ineligible { border-color: var(--line); background: var(--surface-hover); color: var(--muted); }
 .status-badge.pending { border-color: color-mix(in srgb,var(--amber) 30%,transparent); background: color-mix(in srgb,var(--amber) 10%,transparent); color: var(--amber); }
 .status-badge.failed,.status-badge.quota_exhausted { border-color: color-mix(in srgb,var(--red) 30%,transparent); background: color-mix(in srgb,var(--red) 10%,transparent); color: var(--red); }
 .row-actions { display: flex; justify-content: flex-end; gap: 2px; }
@@ -261,8 +261,19 @@ textarea { min-height: 90px; resize: vertical; }
 .filter-panel label { min-width: 0; }
 .filter-panel input,.filter-panel select { min-height: 34px; font-size: 11px; }
 .log-mode-tabs { grid-column: 1/-1; width: fit-content; }
-.failover-log-table .data-table { min-width: 1120px; }
+.failover-log-table .data-table { min-width: 0; }
 .failover-log-table .data-table th,.failover-log-table .data-table td { font-size: 10px; }
+.failover-log-row { cursor: pointer; }
+.failover-log-row td { white-space: normal; }
+.failover-reason { display: grid; gap: 3px; min-width: 0; }
+.failover-reason strong,.failover-reason span { overflow-wrap: anywhere; }
+.failover-reason span { color: var(--muted); font-size: 9px; line-height: 1.35; }
+@media (max-width: 1000px) {
+  .failover-log-table .data-table,.failover-log-table .data-table thead,.failover-log-table .data-table tbody { display: block; width: 100%; }
+  .failover-log-table .data-table thead tr,.failover-log-table .data-table tbody tr { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); width: 100%; }
+  .failover-log-table .data-table th,.failover-log-table .data-table td { display: block; min-width: 0; min-height: 54px; height: auto; padding: 7px 9px; overflow: hidden; text-overflow: ellipsis; }
+  .failover-log-table .data-table th { min-height: 32px; }
+}
 .pagination-bar { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 12px; border-top: 1px solid var(--line); }
 .pagination-bar > span,.pagination-controls strong { color: var(--muted); font-size: 10px; }
 .pagination-controls { display: flex; align-items: center; gap: 4px; }
