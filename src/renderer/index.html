@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>AIHub Desktop</title>
+    <link rel="stylesheet" href="fluent.css" />
+  </head>
+  <body>
+    <div class="window-drag-region" aria-hidden="true"></div>
+    <div id="boot" class="boot-screen">
+      <img src="../../assets/icon.png" alt="AIHub" />
+      <div class="spinner" aria-label="正在启动"></div>
+    </div>
+
+    <main id="login-view" class="login-view hidden">
+      <section class="login-brand" aria-label="AIHub Desktop">
+        <div class="login-brand-copy">
+          <img src="../../assets/icon.png" alt="" class="brand-mark-large" />
+          <p class="eyebrow">AIHUB DESKTOP</p>
+          <h1>你的 API，<br />清晰掌握。</h1>
+          <p>余额、密钥、调用与充值，集中在一个安静的 Windows 工作台。</p>
+        </div>
+        <div class="login-visual" aria-hidden="true">
+          <div class="visual-line line-one"></div>
+          <div class="visual-line line-two"></div>
+          <div class="visual-line line-three"></div>
+          <div class="visual-metric"><span>Today</span><strong>Live</strong></div>
+        </div>
+      </section>
+      <section class="login-panel">
+        <form id="login-form" class="login-form">
+          <div>
+            <p class="eyebrow">欢迎回来</p>
+            <h2>登录 AIHub</h2>
+            <p class="muted">使用你的普通用户账户继续。</p>
+          </div>
+          <label>
+            <span>邮箱</span>
+            <input id="login-email" name="email" type="email" autocomplete="username" required />
+          </label>
+          <label>
+            <span>密码</span>
+            <div class="password-field">
+              <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+              <button type="button" class="icon-button" id="toggle-password" title="显示密码" aria-label="显示密码">
+                <i data-lucide="eye"></i>
+              </button>
+            </div>
+          </label>
+          <label class="remember-account">
+            <input id="remember-account" type="checkbox" checked />
+            <span>记住此账号</span>
+          </label>
+          <p id="login-error" class="form-error hidden" role="alert"></p>
+          <button type="submit" class="primary-button wide">
+            <span>登录</span><i data-lucide="arrow-right"></i>
+          </button>
+          <p class="security-note"><i data-lucide="shield-check"></i> 密码不会保存在这台电脑上</p>
+        </form>
+      </section>
+    </main>
+
+    <div id="app-view" class="app-view hidden">
+      <aside class="sidebar">
+        <div class="brand-row">
+          <img src="../../assets/icon.png" alt="" />
+          <div><strong>AIHub</strong><span>Desktop</span></div>
+        </div>
+        <nav id="sidebar-nav" aria-label="主导航">
+          <div class="nav-section"><span class="nav-section-label">工作区</span>
+            <button data-route="dashboard" class="nav-item active"><i data-lucide="layout-dashboard"></i><span>总览</span></button>
+            <button data-route="keys" class="nav-item"><i data-lucide="key-round"></i><span>API Key</span></button>
+            <button data-route="usage" class="nav-item"><i data-lucide="chart-no-axes-combined"></i><span>用量</span></button>
+            <button data-route="logs" class="nav-item"><i data-lucide="list-tree"></i><span>调用日志</span></button>
+            <button data-route="providers" class="nav-item"><i data-lucide="store"></i><span>供应商大厅</span></button>
+          </div>
+          <div class="nav-section"><span class="nav-section-label">工具</span>
+            <button data-route="clients" class="nav-item"><i data-lucide="blocks"></i><span>客户端配置</span></button>
+            <button data-route="guide" class="nav-item"><i data-lucide="book-open-check"></i><span>使用教程</span></button>
+          </div>
+          <div class="nav-section"><span class="nav-section-label">账户</span>
+            <button data-route="plans" class="nav-item"><i data-lucide="package-open"></i><span>套餐</span></button>
+            <button data-route="billing" class="nav-item"><i data-lucide="wallet-cards"></i><span>充值</span></button>
+            <button data-route="redeem" class="nav-item"><i data-lucide="ticket-check"></i><span>兑换码</span></button>
+            <button data-route="affiliate" class="nav-item"><i data-lucide="users-round"></i><span>邀请返利</span></button>
+            <button data-route="account" class="nav-item"><i data-lucide="circle-user-round"></i><span>账户设置</span></button>
+            <button data-route="changelog" class="nav-item"><i data-lucide="scroll-text"></i><span>更新日志</span></button>
+            <button data-route="about" class="nav-item"><i data-lucide="info"></i><span>关于本软件</span></button>
+          </div>
+        </nav>
+        <div class="sidebar-footer">
+          <button id="open-site" class="nav-item"><i data-lucide="external-link"></i><span>打开官网</span></button>
+          <button id="logout-button" class="nav-item"><i data-lucide="log-out"></i><span>退出当前设备</span></button>
+          <div class="service-status"><span class="status-dot"></span><span>AIHub 服务正常</span></div>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p id="page-eyebrow" class="eyebrow">OVERVIEW</p>
+            <h1 id="page-title">总览</h1>
+          </div>
+          <div class="topbar-actions">
+            <button id="theme-toggle" class="icon-button toolbar-button" title="切换深浅主题" aria-label="切换深浅主题"><i data-lucide="moon"></i></button>
+            <button id="refresh-page" class="icon-button toolbar-button" title="刷新" aria-label="刷新"><i data-lucide="refresh-cw"></i></button>
+            <button id="account-menu" class="account-chip">
+              <span id="account-avatar">A</span>
+              <span id="account-name">账户</span>
+              <i data-lucide="chevron-down"></i>
+            </button>
+          </div>
+        </header>
+        <div id="content" class="content" tabindex="-1"></div>
+      </section>
+    </div>
+
+    <div id="modal-root"></div>
+    <div id="info-bubble" class="info-bubble" role="tooltip"></div>
+    <div id="toast-root" class="toast-root" aria-live="polite"></div>
+    <script src="../../assets/lucide.js"></script>
+    <script src="../../assets/chart.js"></script>
+    <script src="../../node_modules/qrcode-generator/qrcode.js"></script>
+    <script src="../../node_modules/marked/lib/marked.umd.js"></script>
+    <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,81 @@
+{
+  "name": "aihub-desktop",
+  "version": "1.0.6",
+  "private": true,
+  "description": "AIHub personal desktop dashboard for Windows",
+  "author": "AIHub Desktop",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test:installer-upgrade": "node tools/installer-upgrade-contract-smoke.cjs",
+    "test:remember-account": "node tools/remember-account-smoke.cjs",
+    "test:config-service": "node tools/config-service-smoke.cjs",
+    "test:client-ui": "node tools/client-config-ui-smoke.cjs",
+    "test:payment-ui": "node tools/payment-ui-smoke.cjs",
+    "test:payment-flow": "node tools/payment-flow-smoke.cjs",
+    "test:provider-key-features": "node tools/provider-key-features-smoke.cjs",
+    "test:guide-tray-contract": "node tools/guide-tray-contract-smoke.cjs",
+    "test:single-instance": "node tools/single-instance-smoke.cjs",
+    "test:announcement-markdown": "node tools/announcement-markdown-smoke.cjs",
+    "test:usage-cache": "node tools/usage-cache-smoke.cjs",
+    "test:dashboard-redeem": "node tools/dashboard-redeem-smoke.cjs",
+    "test:sidecar-rpc": "node tools/sidecar-rpc-smoke.cjs",
+    "clean:old-builds": "node tools/clean-old-builds.cjs",
+    "predist": "node tools/clean-old-builds.cjs",
+    "pack": "electron-builder --dir --win",
+    "dist:folder": "electron-builder --dir --win",
+    "dist": "electron-builder --win"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "dompurify": "^3.3.1",
+    "lucide": "^0.468.0",
+    "marked": "^17.0.1",
+    "qrcode-generator": "^1.4.4"
+  },
+  "devDependencies": {
+    "electron": "^36.9.5",
+    "electron-builder": "^26.0.12",
+    "playwright-core": "^1.61.1"
+  },
+  "build": {
+    "appId": "top.aihub.desktop",
+    "productName": "AIHub Desktop",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "THIRD_PARTY_NOTICES.md",
+      "CONFIG_SOURCES.md",
+      "licenses/**/*",
+      "sidecars/**/*"
+    ],
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "AIHub-Desktop-${version}.${ext}"
+    },
+    "nsis": {
+      "artifactName": "AIHub-Desktop-${version}-Setup.${ext}",
+      "script": "build/installer.nsi",
+      "include": "build/installer.nsh",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AIHub Desktop",
+      "uninstallDisplayName": "卸载 AIHub Desktop",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}
