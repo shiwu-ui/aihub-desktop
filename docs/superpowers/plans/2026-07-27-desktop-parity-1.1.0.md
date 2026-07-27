@@ -138,9 +138,9 @@ function orderedFailoverGroupIds(form) {
 
 function advancedKeyPayload(form, primaryGroupId) {
   const data = new FormData(form)
-  return {
-    use_custom_key: data.get('use_custom_key') === 'on',
-    custom_key: String(data.get('custom_key') || '').trim() || undefined,
+  const useCustomKey = data.get('use_custom_key') === 'on'
+  const payload = {
+    use_custom_key: useCustomKey,
     ip_whitelist: String(data.get('ip_whitelist') || '').trim(),
     ip_blacklist: String(data.get('ip_blacklist') || '').trim(),
     rate_limit_5h: Math.max(0, Number(data.get('rate_limit_5h') || 0)),
@@ -149,6 +149,8 @@ function advancedKeyPayload(form, primaryGroupId) {
     expires_at: normalizeExpiration(data),
     ...keyFailoverPayload(form, primaryGroupId),
   }
+  if (useCustomKey) payload.custom_key = String(data.get('custom_key') || '').trim()
+  return payload
 }
 ```
 
