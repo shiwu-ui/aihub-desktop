@@ -11,7 +11,7 @@ const labels = {
   lowestRate: '\u6700\u4f4e\u500d\u7387\u4f18\u5148',
   preferPrimary: '\u79ef\u6781\u56de\u4e3b',
   upstream503: '\u4e0a\u6e38\u8fd4\u56de 503',
-  recoveryProbe: '\u6062\u590d\u63a2\u9488',
+  activeProbe: '\u4e3b\u52a8\u63a2\u6d4b',
 }
 
 async function run() {
@@ -37,7 +37,7 @@ async function run() {
       const keys = [{ id: 7, name: 'Codex Key', status: 'active', group_id: 1 }]
       const groups = [
         { id: 1, name: 'Primary Group', rate_multiplier: 0.02 },
-        { id: 2, name: 'Fallback Group', rate_multiplier: 0.07 },
+        { id: 2, name: 'Fallback Group', rate_multiplier: 0.03 },
       ]
       const failover = {
         id: 91,
@@ -49,7 +49,7 @@ async function run() {
         target_group_id: 2,
         target_group_name: 'Fallback Group',
         source_multiplier: 0.02,
-        target_multiplier: 0.07,
+        target_multiplier: 0.03,
         strategy: 'lowest_rate',
         recovery_mode: 'prefer_primary',
         reason: 'upstream_503',
@@ -124,11 +124,11 @@ async function run() {
       'Primary Group',
       'Fallback Group',
       '0.02',
-      '0.07',
+      '0.03',
       labels.lowestRate,
       labels.preferPrimary,
       labels.upstream503,
-      labels.recoveryProbe,
+      labels.activeProbe,
       '503',
     ]
     const missingRowText = expectedRowText.filter((text) => !rowText.includes(text))

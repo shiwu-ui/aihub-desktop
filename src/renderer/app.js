@@ -503,7 +503,7 @@ function failoverLabel(value, labels) {
 }
 
 function failoverProbeLabel(value) {
-  if (value === true) return '恢复探针'
+  if (value === true) return '主动探测'
   if (value === false) return '常规转移'
   return String(value || '-')
 }
