@@ -7,6 +7,7 @@
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
+    "test:main-security": "node tools/main-security-smoke.cjs",
     "test:installer-upgrade": "node tools/installer-upgrade-contract-smoke.cjs",
     "test:remember-account": "node tools/remember-account-smoke.cjs",
     "test:config-service": "node tools/config-service-smoke.cjs",

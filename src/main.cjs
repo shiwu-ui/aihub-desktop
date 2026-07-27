@@ -2,6 +2,7 @@ const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, safeStorage, 
 const fs = require('node:fs')
 const path = require('node:path')
 const { createConfigService } = require('./config-service.cjs')
+const { API_BASE, classifyExternalUrl, normalizeAllowedApiRoute } = require('./security-policy.cjs')
 
 // The dashboard is 2D-only. Software rendering avoids a class of invisible
 // window failures caused by old, remote-desktop, or vendor GPU drivers.
@@ -10,20 +11,19 @@ app.disableHardwareAcceleration()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
-const API_BASE = 'https://aihub.top/api/v1'
 const ALLOWED_PREFIXES = [
   '/auth/me',
   '/auth/revoke-all-sessions',
   '/user',
   '/keys',
   '/usage',
-  '/subscriptions',
   '/announcements',
   '/redeem',
   '/payment',
   '/invoices',
   '/groups',
   '/public/monitor/summary',
+  '/public/monitor/series',
 ]
 
 let mainWindow
@@ -181,22 +181,36 @@ async function refreshAccessToken() {
   return data
 }
 
-function isAllowedRoute(route) {
-  if (typeof route !== 'string' || !route.startsWith('/') || route.includes('://') || route.includes('..')) return false
-  const pathname = route.split('?')[0]
-  if (pathname.startsWith('/admin') || pathname.includes('/admin/')) return false
-  return ALLOWED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
-}
-
 async function authenticatedRequest(route, method = 'GET', body) {
-  if (!isAllowedRoute(route)) throw new Error('桌面端拒绝访问未授权接口')
+  const normalizedRoute = normalizeAllowedApiRoute(route, ALLOWED_PREFIXES)
+  if (!normalizedRoute) throw new Error('桌面端拒绝访问未授权接口')
   if (!session.accessToken) await refreshAccessToken()
-  let result = await rawRequest(route, { method, body, token: session.accessToken })
+  let result = await rawRequest(normalizedRoute, { method, body, token: session.accessToken })
   if (result.response.status === 401 && session.refreshToken) {
     await refreshAccessToken()
-    result = await rawRequest(route, { method, body, token: session.accessToken })
+    result = await rawRequest(normalizedRoute, { method, body, token: session.accessToken })
   }
   return unwrap(result.response, result.payload)
+}
+
+async function openExternalUrl(url) {
+  const target = classifyExternalUrl(url)
+  if (target.action === 'reject') return false
+  if (target.action === 'confirm') {
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: '确认打开外部网站',
+      message: '即将离开 AIHub Desktop',
+      detail: `${target.url}\n\n请确认您信任此网站后再继续。`,
+      buttons: ['取消', '继续打开'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    })
+    if (result.response !== 1) return false
+  }
+  await shell.openExternal(target.url)
+  return true
 }
 
 function publicError(error) {
@@ -268,7 +282,7 @@ function createWindow() {
     }
   })
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://')) shell.openExternal(url)
+    void openExternalUrl(url).catch((error) => startupLog('external.open.failed', error.message))
     return { action: 'deny' }
   })
 }
@@ -387,9 +401,7 @@ ipcMain.handle('cc-switch:invoke', async (_event, input) => {
   }
 })
 
-ipcMain.handle('app:open-external', async (_event, url) => {
-  if (typeof url === 'string' && url.startsWith('https://')) await shell.openExternal(url)
-})
+ipcMain.handle('app:open-external', async (_event, url) => openExternalUrl(url))
 
 ipcMain.on('app:set-titlebar-theme', (_event, dark) => {
   if (!mainWindow || typeof mainWindow.setTitleBarOverlay !== 'function') return

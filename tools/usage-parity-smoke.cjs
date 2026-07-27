@@ -35,7 +35,12 @@ async function run() {
       document.querySelector('#app-view').classList.remove('hidden')
       window.__usageCalls = []
       window.__failUsageModels = false
-      state.keys = []
+      window.__failUsageStats = false
+      window.__failUsageDetails = false
+      state.keys = [{ id: 99, name: 'Filtered Page Key', status: 'active' }]
+      state.keyItems = [{ id: 99, name: 'Filtered Page Key', status: 'active' }]
+      state.keyReferences = []
+      state.clientKeys = []
       state.groups = []
       const detail = {
         id: 42, request_id: 'req-42', model: 'gpt-5.6-sol', upstream_model: 'gpt-upstream', reasoning_effort: 'xhigh',
@@ -49,16 +54,25 @@ async function run() {
       const secondDetail = { ...detail, id: 43, request_id: 'req-43', client_ip: '198.51.100.9' }
       request = async (route, options = {}) => {
         window.__usageCalls.push({ route, method: options.method || 'GET', body: options.body })
-        if (route === '/keys?page=1&page_size=100') return { items: [{ id: 7, name: 'Usage Key', status: 'active' }], total: 1, pages: 1 }
+        if (route === '/keys?page=1&page_size=100') return { items: [{ id: 7, name: 'Usage Key', status: 'active' }], total: 101, pages: 2 }
+        if (route === '/keys?page=2&page_size=100') return { items: [{ id: 9, name: 'Second Page Usage Key', status: 'active' }], total: 101, pages: 2 }
+        if (route === '/keys?page=1&page_size=50&sort_by=created_at&sort_order=desc') return { items: [{ id: 8, name: 'Client Key', key: 'sk-client-key', status: 'active' }], total: 51, pages: 2 }
+        if (route === '/keys?page=2&page_size=50&sort_by=created_at&sort_order=desc') return { items: [{ id: 10, name: 'Second Page Client Key', key: 'sk-second-client-key', status: 'active' }], total: 51, pages: 2 }
         if (route === '/groups/available') return [{ id: 3, name: 'Research' }]
-        if (route.startsWith('/usage/stats?')) return { actual_cost: 0.003, standard_cost: 0.05, requests: 1, input_tokens: 120, output_tokens: 80, cache_read_tokens: 20, cache_creation_tokens: 10, endpoints: [{ inbound_endpoint: '/v1/responses', total_tokens: 230, total_actual_cost: 0.003, total_requests: 1 }] }
+        if (route.startsWith('/usage/stats?')) {
+          if (window.__failUsageStats) throw new Error('stats unavailable')
+          return { actual_cost: 0.003, standard_cost: 0.05, requests: 1, input_tokens: 120, output_tokens: 80, cache_read_tokens: 20, cache_creation_tokens: 10, endpoints: [{ inbound_endpoint: '/v1/responses', total_tokens: 230, total_actual_cost: 0.003, total_requests: 1 }] }
+        }
         if (route.startsWith('/usage/dashboard/snapshot-v2?')) return { trend: [{ date: '2026-07-28', input_tokens: 120, output_tokens: 80, actual_cost: 0.003, cost: 0.05 }], groups: [{ name: 'Research', total_tokens: 230, total_actual_cost: 0.003, total_requests: 1 }] }
         if (route.startsWith('/usage/dashboard/models?')) {
           if (window.__failUsageModels) throw new Error('models unavailable')
           return { models: [{ model: 'gpt-5.6-sol', total_tokens: 230, total_actual_cost: 0.003, total_requests: 1 }] }
         }
         if (route === '/usage/42') return detail
-        if (route.startsWith('/usage?')) return { items: [detail, secondDetail, { ...detail, id: 44, request_id: 'req-44' }], total: 33, pages: 2 }
+        if (route.startsWith('/usage?')) {
+          if (window.__failUsageDetails) throw new Error('details unavailable')
+          return { items: [detail, secondDetail, { ...detail, id: 44, request_id: 'req-44' }], total: 33, pages: 2 }
+        }
         throw new Error(`Unexpected route: ${route}`)
       }
       await navigate('usage')
@@ -66,7 +80,17 @@ async function run() {
 
     await page.waitForSelector('#usage-analytics-filter')
     assert.equal(await page.locator('#usage-analytics-filter [name="api_key_id"] option[value="7"]').count(), 1)
+    assert.equal(await page.locator('#usage-analytics-filter [name="api_key_id"] option[value="9"]').count(), 1)
+    assert.equal(await page.locator('#usage-analytics-filter [name="api_key_id"] option[value="99"]').count(), 0)
     assert.equal(await page.locator('#usage-analytics-filter [name="group_id"] option[value="3"]').count(), 1)
+    assert.deepEqual(await page.evaluate(async () => (await ensureClientKeys()).map((key) => key.id)), [8, 10])
+    assert.ok((await page.evaluate(() => window.__usageCalls.map((call) => call.route))).includes('/keys?page=1&page_size=50&sort_by=created_at&sort_order=desc'))
+    await page.evaluate(() => navigate('logs'))
+    await page.waitForSelector('#log-filter-form')
+    assert.equal(await page.locator('#log-filter-form [name="api_key_id"] option[value="7"]').count(), 1)
+    assert.equal(await page.locator('#log-filter-form [name="api_key_id"] option[value="99"]').count(), 0)
+    await page.evaluate(() => navigate('usage'))
+    await page.waitForSelector('#usage-analytics-filter')
     const text = await page.locator('#content').textContent()
     ;['模型分布', '分组使用分布', '端点分布', 'Token 使用趋势', '标准成本'].forEach((label) => assert.ok(text.includes(label), `missing usage section: ${label}`))
     assert.equal(await page.evaluate(() => safeCsvCell('=1+1')), '"\'=1+1"')
@@ -131,6 +155,18 @@ async function run() {
     await page.waitForSelector('.usage-section-error')
     assert.equal(await page.locator('.usage-metrics .metric-card').count(), 5)
     assert.ok((await page.locator('#content').textContent()).includes('最近调用'))
+
+    await page.evaluate(() => { window.__failUsageModels = false; window.__failUsageStats = true })
+    await form.locator('button[type="submit"]').click()
+    await page.waitForSelector('.usage-stats-error')
+    assert.ok((await page.locator('#content').textContent()).includes('最近调用'))
+    assert.ok(await page.locator('[data-action="usage-detail"]').count() > 0)
+    assert.doesNotMatch(await page.locator('.usage-detail-panel').textContent(), /标准成本\s*\$0\.00/)
+
+    await page.evaluate(() => { window.__failUsageStats = false; window.__failUsageDetails = true })
+    await form.locator('button[type="submit"]').click()
+    await page.waitForSelector('.usage-details-error')
+    assert.equal(await page.locator('.usage-metrics .metric-card').count(), 5)
 
     await page.setViewportSize({ width: 980, height: 680 })
     const overflow = await page.evaluate(() => ({ body: document.documentElement.scrollWidth - document.documentElement.clientWidth, content: document.querySelector('#content').scrollWidth - document.querySelector('#content').clientWidth }))

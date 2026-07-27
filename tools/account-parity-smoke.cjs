@@ -20,11 +20,15 @@ async function run() {
       document.querySelector('#login-view').classList.add('hidden')
       document.querySelector('#app-view').classList.remove('hidden')
       window.__accountCalls = []
+      window.__failRemoveAvatar = false
       const profile = { id: 601, username: 'fixture-user', email: 'primary.fixture@example.invalid', avatar_url: '', balance: 42.5, concurrency: 12, status: 'active', balance_notify_enabled: false, balance_notify_threshold: 0, balance_notify_extra_emails: [] }
       request = async (route, options = {}) => {
         window.__accountCalls.push({ route, method: options.method || 'GET', body: options.body })
         if (route === '/user/profile') return profile
-        if (route === '/user' && options.method === 'PUT') return Object.assign(profile, options.body)
+        if (route === '/user' && options.method === 'PUT') {
+          if (window.__failRemoveAvatar && options.body.avatar_url === '') throw new Error('avatar removal unavailable')
+          return Object.assign(profile, options.body)
+        }
         if (['/user/account-bindings/email/send-code', '/user/account-bindings/email', '/user/notify-email/send-code', '/user/notify-email/verify'].includes(route)) return { ok: true }
         if (route === '/user/aff') return { aff_code: 'fixture code/100%', aff_count: 2, aff_quota: 7.5, aff_history_quota: 11.25, aff_frozen_quota: 1.75, effective_rebate_rate_percent: 15, invitees: [{ user_id: 702, username: 'invited-fixture', email: 'invitee.fixture@example.invalid', total_rebate: 3.125, created_at: '2026-07-28T00:00:00Z', direct_rebate: 2.5, bonus_rebate: '0.625 USD' }] }
         throw new Error(`Unexpected route: ${route}`)
@@ -50,16 +54,36 @@ async function run() {
       context.putImageData(image, 0, 0)
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
       const result = await compressAvatar(new File([blob], 'fixture.png', { type: 'image/png' }))
-      return { sourceBytes: blob.size, prefix: result.slice(0, 23), bytes: atob(result.split(',')[1]).length }
+      return { sourceBytes: blob.size, prefix: result.slice(0, 23), bytes: new TextEncoder().encode(result).length }
     })
     assert.ok(avatar.sourceBytes > 20480, JSON.stringify(avatar))
     assert.equal(avatar.prefix, 'data:image/webp;base64,')
     assert.ok(avatar.bytes <= 20480, JSON.stringify(avatar))
 
+    const oversizedGif = await page.evaluate(async () => {
+      try {
+        const result = await compressAvatar(new File([new Uint8Array(15360)], 'oversized-data-url.gif', { type: 'image/gif' }))
+        return { accepted: true, bytes: new TextEncoder().encode(result).length }
+      } catch (error) {
+        return { accepted: false, message: error.message }
+      }
+    })
+    assert.equal(oversizedGif.accepted, false, JSON.stringify(oversizedGif))
+
+    await page.evaluate(() => { window.__failRemoveAvatar = true })
     await page.locator('[data-action="remove-avatar"]').click()
+    await page.waitForSelector('.toast.error')
+    assert.equal(await page.locator('[data-action="remove-avatar"]').isEnabled(), true)
+    await page.evaluate(() => { window.__failRemoveAvatar = false })
+    await page.locator('[data-action="remove-avatar"]').click()
+    const invalidPrimaryCalls = await page.evaluate(() => window.__accountCalls.filter((call) => call.route === '/user/account-bindings/email/send-code').length)
+    await page.locator('#primary-email-form [name="email"]').fill('not-an-email')
     await page.locator('[data-action="send-primary-email-code"]').click()
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)))
+    assert.equal(await page.evaluate(() => window.__accountCalls.filter((call) => call.route === '/user/account-bindings/email/send-code').length), invalidPrimaryCalls)
     const emailForm = page.locator('#primary-email-form')
     await emailForm.locator('[name="email"]').fill('primary.fixture@example.invalid')
+    await page.locator('[data-action="send-primary-email-code"]').click()
     await emailForm.locator('[name="verify_code"]').fill('123456')
     await emailForm.locator('[name="password"]').fill('fixture-password-123')
     await emailForm.locator('button[type="submit"]').click()
@@ -70,6 +94,11 @@ async function run() {
     await balanceForm.locator('button[type="submit"]').click()
 
     const extraForm = page.locator('#extra-email-form')
+    const invalidExtraCalls = await page.evaluate(() => window.__accountCalls.filter((call) => call.route === '/user/notify-email/send-code').length)
+    await extraForm.locator('[name="email"]').fill('also-not-an-email')
+    await page.locator('[data-action="send-extra-email-code"]').click()
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)))
+    assert.equal(await page.evaluate(() => window.__accountCalls.filter((call) => call.route === '/user/notify-email/send-code').length), invalidExtraCalls)
     await extraForm.locator('[name="email"]').fill('notify.fixture@example.invalid')
     await page.locator('[data-action="send-extra-email-code"]').click()
     await extraForm.locator('[name="code"]').fill('654321')

@@ -24,6 +24,11 @@ async function run() {
       document.querySelector('#login-view').classList.add('hidden')
       document.querySelector('#app-view').classList.remove('hidden')
       window.__featureCalls = []
+      window.__modalUnhandled = []
+      window.addEventListener('unhandledrejection', (event) => {
+        event.preventDefault()
+        window.__modalUnhandled.push(event.reason?.message || String(event.reason))
+      })
       const groups = [
         { id: 1, name: 'Base', rate_multiplier: 0.01, platform: 'openai' },
         { id: 2, name: 'Stable', rate_multiplier: 0.02, platform: 'openai' },
@@ -38,19 +43,40 @@ async function run() {
         current_concurrency: 2, today_usage: 4.5, usage_30d: 65.5, expires_at: '2026-12-31T23:59:00Z',
         last_used_at: '2026-07-19T01:00:00Z',
       }
+      state.groups = groups
       request = async (route, options = {}) => {
         window.__featureCalls.push({ route, method: options.method || 'GET', body: options.body })
         if (route.startsWith('/public/monitor/summary')) return {
           monitoringActive: true, generatedAt: '2026-07-19T01:00:00Z',
           apis: [{ id: 'stable', group_id: 2, planType: 'Stable', platform: 'openai', available: true, priceMultiplier: 0.02, firstTokenLatencyMs: 420, outputTokensPerSecond: 70, inputTokens: 800, outputTokens: 200, cacheHitRate: 'Insufficient', checkedAt: '2026-07-19T01:00:00Z', successRates: { '6h': 0.99, '24h': 0.98, '7d': 0.97, '30d': 0.96 } }],
         }
-        if (route === '/public/monitor/series/6h') return { seriesByApiId: { stable: [['2026-07-19T00:00:00Z', 1, 420, 70, 800]] } }
+        if (route === '/public/monitor/series/6h') return { seriesByApiId: { stable: [
+          ['2026-07-19T00:00:00Z', 1, 420, 70, 800],
+          ['2026-07-19T00:15:00Z', 1, null, 72, 820],
+          ['2026-07-19T00:30:00Z', 1, 380, 75, 840],
+        ] } }
         if (route === '/groups/available') return groups
-        if (route.startsWith('/keys?')) return { items: [key], total: 21, pages: 2 }
+        if (route.startsWith('/keys?')) {
+          const params = new URLSearchParams(route.split('?')[1] || '')
+          if (params.get('status') === 'active' && params.get('sort_by') === 'last_used_at') {
+            const page = Number(params.get('page') || 1)
+            return page === 1
+              ? { items: [key], total: 101, pages: 2 }
+              : { items: [{ ...key, id: 9, name: 'Second active key', group_id: 3, group: groups[2] }], total: 101, pages: 2 }
+          }
+          return { items: [key], total: 21, pages: 2 }
+        }
         if (route === '/keys/7' && (!options.method || options.method === 'GET')) return key
+        if (route === '/keys/7' && options.method === 'DELETE') return { ok: true }
         if (route === '/keys/7/group' && options.method === 'PUT') return { ...key, group_id: options.body.group_id }
-        if (route === '/keys/7' && options.method === 'PUT') return { ...key, ...options.body }
-        if (route === '/keys' && options.method === 'POST') return { ...key, id: 8, ...options.body, key: 'sk-created-feature' }
+        if (route === '/keys/7' && options.method === 'PUT') {
+          if (window.__failKeyUpdate) throw new Error('update key failed')
+          return { ...key, ...options.body }
+        }
+        if (route === '/keys' && options.method === 'POST') {
+          if (window.__failKeyCreate) throw new Error('create key failed')
+          return { ...key, id: 8, ...options.body, key: 'sk-created-feature' }
+        }
         throw new Error(`Unexpected mock route: ${route}`)
       }
       await navigate('providers')
@@ -58,6 +84,146 @@ async function run() {
     await page.waitForSelector('.provider-row')
     assert.deepEqual(await page.locator('[data-provider-sort]').allTextContents(), ['倍率', '最快首字', '可用率'])
     assert.deepEqual(await page.locator('[data-provider-metric]').allTextContents(), ['首字', 'TPS', '输入 Token'])
+    assert.deepEqual(await page.evaluate(() => ({
+      labels: state.providerCharts[0].data.labels,
+      values: state.providerCharts[0].data.datasets[0].data,
+    })), {
+      labels: ['2026-07-19T00:00:00Z', '2026-07-19T00:30:00Z'],
+      values: [420, 380],
+    }, 'provider trend labels must preserve the timestamps of valid samples')
+    const paginationSafety = await page.evaluate(async () => {
+      const originalRequest = request
+      let calls = 0
+      request = async (route) => {
+        calls += 1
+        const page = Number(new URLSearchParams(route.split('?')[1]).get('page'))
+        return {
+          items: Array.from({ length: 100 }, (_, index) => ({ id: (page - 1) * 100 + index + 1 })),
+          total: 999999,
+          pages: 51,
+        }
+      }
+      const cappedItems = await loadAllKeys(100)
+      const capped = { calls, items: cappedItems.length }
+
+      calls = 0
+      request = async (route) => {
+        calls += 1
+        const page = Number(new URLSearchParams(route.split('?')[1]).get('page'))
+        const count = page === 1 ? 100 : page === 2 ? 50 : 0
+        return { items: Array.from({ length: count }, (_, index) => ({ id: (page - 1) * 100 + index + 1 })), total: 150, pages: 50 }
+      }
+      const totalItems = await loadAllKeys(100)
+      const totalBound = { calls, items: totalItems.length }
+
+      calls = 0
+      request = async () => {
+        calls += 1
+        return { items: [{ id: 1 }], total: 1000, pages: 10 }
+      }
+      const repeatedItems = await loadAllKeys(100)
+      const repeated = { calls, items: repeatedItems.map((item) => item.id) }
+
+      calls = 0
+      let infiniteRejected = false
+      request = async () => {
+        calls += 1
+        if (calls > 1) throw new Error('unbounded pagination')
+        return { items: [{ id: 1 }], total: Infinity, pages: Infinity }
+      }
+      let infiniteItems = []
+      try { infiniteItems = await loadAllKeys(100) } catch { infiniteRejected = true }
+      const invalidPages = { calls, items: infiniteItems.length, rejected: infiniteRejected }
+      request = originalRequest
+      return { capped, totalBound, repeated, invalidPages }
+    })
+
+    const cacheGenerationSafety = await page.evaluate(async () => {
+      const originalRequest = request
+      async function exercise(cacheName, promiseName, ensure) {
+        state[cacheName] = []
+        state[promiseName] = null
+        const releases = []
+        request = async () => new Promise((resolve) => releases.push(resolve))
+        const stalePromise = ensure()
+        const registeredStalePromise = state[promiseName]
+        while (releases.length < 1) await Promise.resolve()
+        invalidateKeyCaches()
+        const freshPromise = ensure()
+        const registeredFreshPromise = state[promiseName]
+        for (let attempt = 0; attempt < 5 && releases.length < 2; attempt += 1) await Promise.resolve()
+        const freshStarted = releases.length === 2 && registeredFreshPromise !== registeredStalePromise
+        releases[0]({ items: [{ id: 'stale' }], total: 1, pages: 1 })
+        await stalePromise
+        const staleIgnored = state[cacheName].length === 0
+        const freshStillRegistered = state[promiseName] === registeredFreshPromise
+        if (releases[1]) {
+          releases[1]({ items: [{ id: 'fresh' }], total: 1, pages: 1 })
+          await freshPromise
+        }
+        const freshWon = state[cacheName][0]?.id === 'fresh'
+        state[cacheName] = []
+        state[promiseName] = null
+        return { freshStarted, staleIgnored, freshStillRegistered, freshWon }
+      }
+      const references = await exercise('keyReferences', 'keyReferencePromise', ensureKeyReferences)
+      const clients = await exercise('clientKeys', 'clientKeysPromise', ensureClientKeys)
+      request = originalRequest
+      invalidateKeyCaches()
+      return { references, clients }
+    })
+
+    async function captureModalFailure(setup, action, expectedMessage) {
+      await page.evaluate(() => { $('#toast-root').innerHTML = '' })
+      const unhandledBefore = await page.evaluate(() => window.__modalUnhandled.length)
+      await setup()
+      if (action === 'submit-create-key') await page.fill('#create-key-form [name="name"]', 'Failing create')
+      await page.click(`[data-action="${action}"]`)
+      await page.waitForFunction(({ expectedMessage, unhandledBefore }) => (
+        $$('.toast.error').some((node) => node.textContent.includes(expectedMessage)) ||
+        window.__modalUnhandled.length > unhandledBefore
+      ), { expectedMessage, unhandledBefore })
+      const result = await page.evaluate(({ action, expectedMessage, unhandledBefore }) => ({
+        busy: Boolean($(`[data-action="${action}"]`)?.disabled),
+        toast: $$('.toast.error').some((node) => node.textContent.includes(expectedMessage)),
+        noUnhandled: window.__modalUnhandled.length === unhandledBefore,
+      }), { action, expectedMessage, unhandledBefore })
+      await page.evaluate(() => closeModal())
+      return result
+    }
+
+    const createFailure = await captureModalFailure(
+      () => page.evaluate(() => { window.__failKeyCreate = true; createKeyModal() }),
+      'submit-create-key',
+      'create key failed',
+    )
+    await page.evaluate(() => { window.__failKeyCreate = false })
+    const updateFailure = await captureModalFailure(
+      () => page.evaluate(() => {
+        window.__failKeyUpdate = true
+        createKeyModal({ id: 7, name: 'Codex Key', group_id: 1, quota: 0 })
+      }),
+      'submit-update-key',
+      'update key failed',
+    )
+    await page.evaluate(() => { window.__failKeyUpdate = false })
+    const earlyModalFailure = await captureModalFailure(
+      () => page.evaluate(() => {
+        window.__savedRefreshUsageRegion = refreshUsageRegion
+        refreshUsageRegion = async () => { throw new Error('region refresh failed') }
+        openModal('Region', '<button data-action="usage-region-refresh" data-ip="203.0.113.1">Refresh</button>')
+      }),
+      'usage-region-refresh',
+      'region refresh failed',
+    )
+    await page.evaluate(() => {
+      refreshUsageRegion = window.__savedRefreshUsageRegion
+      window.__featureCalls = window.__featureCalls.filter((call) => !(
+        (call.route === '/keys' && call.method === 'POST') ||
+        (call.route === '/keys/7' && call.method === 'PUT')
+      ))
+    })
+
     assert.deepEqual(await page.evaluate(() => sortedProviders([
       { id: 'missing', priceMultiplier: null, firstTokenLatencyMs: null, successRates: { '6h': null } },
       { id: 'slow', priceMultiplier: 0.02, firstTokenLatencyMs: 800, successRates: { '6h': 0.99 } },
@@ -65,9 +231,28 @@ async function run() {
     ], 'rate').map((item) => item.id)), ['cheap', 'slow', 'missing'])
     const cacheText = await page.textContent('.cache-hit-rate')
     await page.click('[data-action="use-provider-group"]')
+    const providerKeyIds = await page.locator('#provider-key-switch-form option[value]').evaluateAll((options) => options.map((option) => option.value).filter(Boolean))
+    const regressionChecks = {
+      paginationCapped: paginationSafety.capped.calls === 50 && paginationSafety.capped.items === 5000,
+      paginationUsesTotal: paginationSafety.totalBound.calls === 2 && paginationSafety.totalBound.items === 150,
+      paginationStopsOnRepeat: paginationSafety.repeated.calls === 2 && JSON.stringify(paginationSafety.repeated.items) === '[1]',
+      paginationRejectsInfiniteMetadata: paginationSafety.invalidPages.calls === 1 && paginationSafety.invalidPages.items === 1 && !paginationSafety.invalidPages.rejected,
+      referenceGenerationSafe: Object.values(cacheGenerationSafety.references).every(Boolean),
+      clientGenerationSafe: Object.values(cacheGenerationSafety.clients).every(Boolean),
+      createFailureHandled: !createFailure.busy && createFailure.toast && createFailure.noUnhandled,
+      updateFailureHandled: !updateFailure.busy && updateFailure.toast && updateFailure.noUnhandled,
+      earlyModalFailureHandled: !earlyModalFailure.busy && earlyModalFailure.toast && earlyModalFailure.noUnhandled,
+      providerLoadsAllActiveKeys: JSON.stringify(providerKeyIds) === '["7","9"]',
+    }
+    const failedRegressions = Object.entries(regressionChecks).filter(([, passed]) => !passed).map(([name]) => name)
+    if (failedRegressions.length) {
+      throw new Error(`important regression failures: ${JSON.stringify({ failedRegressions, paginationSafety, cacheGenerationSafety, createFailure, updateFailure, earlyModalFailure, providerKeyIds })}`)
+    }
     await page.selectOption('#provider-key-switch-form select', '7')
+    await page.evaluate(() => { state.keyReferences = [{ id: 7 }]; state.clientKeys = [{ id: 7 }] })
     await page.click('[data-action="switch-provider-key"]')
     await page.waitForSelector('#modal-root .modal', { state: 'detached' })
+    assert.deepEqual(await page.evaluate(() => ({ references: state.keyReferences, clients: state.clientKeys })), { references: [], clients: [] })
     await page.evaluate(() => navigate('keys'))
     await page.waitForSelector('[data-action="edit-key"]')
     await page.click('[data-action="edit-key"]')
@@ -142,8 +327,10 @@ async function run() {
     await page.fill('[name="rate_limit_1d"]', '300')
     await page.fill('[name="rate_limit_7d"]', '1000')
     await page.fill('[name="expires_at"]', '2026-12-31T23:59')
+    await page.evaluate(() => { state.keyReferences = [{ id: 7 }]; state.clientKeys = [{ id: 7 }] })
     await page.click('[data-action="submit-update-key"]')
     await page.waitForSelector('#modal-root .modal', { state: 'detached' })
+    assert.deepEqual(await page.evaluate(() => ({ references: state.keyReferences, clients: state.clientKeys })), { references: [], clients: [] })
     const calls = await page.evaluate(() => window.__featureCalls)
     const groupCall = calls.find((call) => call.route === '/keys/7/group' && call.method === 'PUT')
     const updateCall = calls.find((call) => call.route === '/keys/7' && call.method === 'PUT')
@@ -198,6 +385,18 @@ async function run() {
     const createCall = (await page.evaluate(() => window.__featureCalls)).find((call) => call.route === '/keys' && call.method === 'POST')
     assert.equal(createCall?.body?.expires_in_days, 30)
     assert.equal(createCall?.body?.custom_key?.length, 16)
+    assert.equal(createCall?.body?.use_custom_key, true)
+    await page.click('[data-action="finish-create-key"]')
+    await page.waitForSelector('#modal-root .modal', { state: 'detached' })
+
+    await page.click('[data-action="create-key"]')
+    await page.waitForSelector('#create-key-form')
+    await page.fill('[name="name"]', 'Generated Key')
+    await page.click('[data-action="submit-create-key"]')
+    await page.waitForSelector('[data-action="finish-create-key"]')
+    const generatedCreateCall = (await page.evaluate(() => window.__featureCalls)).filter((call) => call.route === '/keys' && call.method === 'POST').at(-1)
+    assert.equal(generatedCreateCall?.body?.use_custom_key, false)
+    assert.ok(!Object.hasOwn(generatedCreateCall.body, 'custom_key'))
     await page.click('[data-action="finish-create-key"]')
     await page.waitForSelector('#modal-root .modal', { state: 'detached' })
 
@@ -218,13 +417,24 @@ async function run() {
     assert.ok(listParity.columns, 'key list must offer approved optional columns')
     assert.ok(listParity.endpoints.length >= 2 && listParity.endpoints.every((endpoint) => endpoint.startsWith('https://')))
     assert.ok(listParity.configureAction, 'key list must offer selected-key client configuration')
+    await page.evaluate(() => { state.keyReferences = [{ id: 7 }]; state.clientKeys = [{ id: 7 }] })
+    const toggleCallsBefore = await page.evaluate(() => window.__featureCalls.filter((call) => call.route === '/keys/7' && call.method === 'PUT').length)
+    await page.click('[data-action="toggle-key"]')
+    await page.waitForFunction((count) => window.__featureCalls.filter((call) => call.route === '/keys/7' && call.method === 'PUT').length > count, toggleCallsBefore)
+    await page.waitForFunction(() => state.keyReferences.length === 0 && state.clientKeys.length === 0)
+    assert.deepEqual(await page.evaluate(() => ({ references: state.keyReferences, clients: state.clientKeys })), { references: [], clients: [] })
+    await page.evaluate(() => { state.keyReferences = [{ id: 7 }]; state.clientKeys = [{ id: 7 }] })
+    await page.click('[data-action="delete-key"]')
+    await page.click('[data-action="confirm-delete-key"]')
+    await page.waitForSelector('#modal-root .modal', { state: 'detached' })
+    assert.deepEqual(await page.evaluate(() => ({ references: state.keyReferences, clients: state.clientKeys })), { references: [], clients: [] })
     if (cacheText !== 'Insufficient' || initialMaxRate !== '0.02' || groupCall?.body?.group_id !== 2 || hasAdminCall || errors.length) {
       throw new Error(JSON.stringify({ cacheText, initialMaxRate, groupCall, updateCall, hasAdminCall, errors }))
     }
     console.log(JSON.stringify({ ok: true, cacheHitRate: true, existingKeySwitch: true, advancedPolicy: true, orderedFailover: true, keyListParity: true, noAdminRoutes: true }))
   } finally {
     await app.close()
-    await fs.rm(sandbox, { recursive: true, force: true })
+    await fs.rm(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 }
 

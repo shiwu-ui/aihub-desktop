@@ -24,3 +24,8 @@
 [2026-07-28 01:39] 限定渲染器仅可连接 GeoJS 地区查询域名 (更新 src/renderer/index.html Content-Security-Policy)
 [2026-07-28 01:55] 运行全部注册测试，17 项全部通过 (逐个执行 package.json 中 test:* 脚本)
 [2026-07-28 01:58] 完成 11 个视图双窗口视觉回归，22 张截图均无页面级溢出 (tools/visual-qa-final.cjs)
+[2026-07-28 02:43] 加固主进程 API 路由和外链安全策略并新增回归测试 (更新 src/main.cjs、package.json；新增 src/security-policy.cjs、tools/main-security-smoke.cjs)
+[2026-07-28 03:27] 完成桌面端 1.1.0 最终回归，18 项注册测试全部通过 (逐个执行 package.json 中 test:* 脚本)
+[2026-07-28 03:27] 完成 11 个视图双窗口视觉回归，22 张截图全部生成且无页面级溢出 (tools/visual-qa-final.cjs)
+[2026-07-28 03:27] 使用进程级国内镜像构建 1.1.0 安装版与免安装版并清理旧 1.0.7 产物 (ELECTRON_MIRROR=npmmirror；electron-builder --win --publish never)
+[2026-07-28 03:27] 校验 1.1.0 PE/ASAR 版本、SHA-256 并完成打包程序启动烟雾测试 (校验两个 EXE、app.asar；packaged smoke 2/2 通过)

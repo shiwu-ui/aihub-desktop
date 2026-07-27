@@ -27,6 +27,7 @@ async function run() {
       state.user = { id: 1064, username: 'Desktop User', balance: 88.5 }
       window.__paymentCalls = []
       window.__orderStatus = 'PENDING'
+      window.__failOrders = false
       request = async (route, options = {}) => {
         window.__paymentCalls.push({ route, method: options.method || 'GET', body: options.body })
         if (route === '/subscriptions/summary') return { active_count: 0 }
@@ -43,7 +44,11 @@ async function run() {
           balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0,
           recharge_fee_rate: 2, help_text: '', help_image_url: '', stripe_publishable_key: '',
         }
-        if (route.startsWith('/payment/orders/my')) return { items: [{ id: 88, out_trade_no: 'ORDER-88', amount: 12, currency: 'CNY', status: 'PENDING', created_at: '2026-07-28T00:00:00Z' }], total: 40, pages: 2 }
+        if (route.startsWith('/payment/orders/my')) {
+          if (window.__failOrders) throw new Error('orders unavailable')
+          if (window.__delayOrders) await new Promise((resolve) => { window.__releaseOrders = resolve })
+          return { items: [{ id: 88, out_trade_no: 'ORDER-88', amount: 12, currency: 'CNY', status: 'PENDING', created_at: '2026-07-28T00:00:00Z' }], total: 40, pages: 2 }
+        }
         if (route === '/payment/orders' && options.method === 'POST') return {
           order_id: 77, amount: options.body.amount, pay_amount: 20.4, currency: 'CNY', fee_rate: 2,
           qr_code: 'https://aihub.top/pay/mock-order-77', out_trade_no: 'DESKTOP-MOCK-77',
@@ -61,6 +66,28 @@ async function run() {
       await navigate('billing')
     })
     await page.waitForSelector('#recharge-form')
+    await page.waitForSelector('[name="order-status"]')
+    await page.fill('#recharge-amount', '37.25')
+    await page.focus('#recharge-amount')
+    await page.evaluate(() => renderBilling())
+    if (await page.inputValue('#recharge-amount') !== '37.25' || await page.evaluate(() => document.activeElement?.id) !== 'recharge-amount') throw new Error('billing refresh did not preserve recharge draft focus')
+    await page.evaluate(() => { window.__delayOrders = true; window.__delayedBillingRender = renderBilling() })
+    await page.waitForFunction(() => typeof window.__releaseOrders === 'function')
+    await page.fill('#recharge-amount', '41.5')
+    await page.focus('#recharge-amount')
+    await page.evaluate(async () => { window.__delayOrders = false; window.__releaseOrders(); await window.__delayedBillingRender })
+    if (await page.inputValue('#recharge-amount') !== '41.5' || await page.evaluate(() => document.activeElement?.id) !== 'recharge-amount') throw new Error('billing refresh overwrote a draft edited while polling')
+    await page.evaluate(async () => { window.__failOrders = true; await renderBilling() })
+    if (await page.locator('.payment-orders-error').count() !== 1 || await page.locator('#recharge-form').count() !== 1 || (await page.textContent('#content')).includes('暂无订单')) throw new Error('order failure was rendered as an empty list')
+    const unavailableMetrics = await page.locator('.metric-card').evaluateAll((cards) => cards.map((card) => ({
+      value: card.querySelector('.metric-value')?.textContent,
+      foot: card.querySelector('.metric-foot')?.textContent,
+    })))
+    if (unavailableMetrics[2]?.value !== '-' || unavailableMetrics[3]?.value !== '-' || unavailableMetrics[2]?.foot !== unavailableMetrics[0]?.foot || unavailableMetrics[3]?.foot !== unavailableMetrics[0]?.foot) {
+      throw new Error(`unavailable order metrics rendered as data: ${JSON.stringify(unavailableMetrics)}`)
+    }
+    await page.evaluate(() => { window.__failOrders = false })
+    await page.locator('[data-action="retry-orders"]').click()
     await page.waitForSelector('[name="order-status"]')
     await page.locator('[data-action="orders-next"]').click()
     await page.waitForFunction(() => window.__paymentCalls.some((call) => call.route.includes('/payment/orders/my?page=2&page_size=20')))
@@ -95,7 +122,7 @@ async function run() {
     console.log(JSON.stringify({ ok: true, methods, total, qrRendered: true, completed: true, noAdminRoutes: true }))
   } finally {
     await app.close()
-    await fs.rm(sandbox, { recursive: true, force: true })
+    await fs.rm(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 }
 

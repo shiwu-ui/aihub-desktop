@@ -41,6 +41,65 @@ async function run() {
       await navigate('clients')
     })
     await page.waitForSelector('.client-config-page')
+    const clientRaceSafety = await page.evaluate(async () => {
+      const originalRequest = request
+      const cachedClient = { clientState: { installed: false, targets: [] }, profiles: [], backups: [] }
+      state.clientCache.codex = cachedClient
+      state.clientCache.opencode = cachedClient
+
+      async function runRenderRace(mutate) {
+        let releaseKeys
+        request = async (route, options) => {
+          if (route.startsWith('/keys?')) return new Promise((resolve) => { releaseKeys = () => resolve({ items: [], total: 0, pages: 1 }) })
+          return originalRequest(route, options)
+        }
+        state.route = 'clients'
+        state.clientId = 'codex'
+        state.clientKeys = []
+        state.clientKeysPromise = null
+        const pending = renderClients()
+        while (!releaseKeys) await Promise.resolve()
+        mutate()
+        $('#content').innerHTML = '<div id="client-race-sentinel">current page</div>'
+        releaseKeys()
+        await pending
+        return Boolean($('#client-race-sentinel'))
+      }
+
+      const routeStayedCurrent = await runRenderRace(() => { state.route = 'billing' })
+      const clientStayedCurrent = await runRenderRace(() => { state.clientId = 'opencode' })
+
+      let releaseModalKeys
+      request = async (route, options) => {
+        if (route.startsWith('/keys?')) return new Promise((resolve) => { releaseModalKeys = () => resolve({ items: [], total: 0, pages: 1 }) })
+        return originalRequest(route, options)
+      }
+      state.route = 'clients'
+      state.clientId = 'codex'
+      state.clientKeys = []
+      state.clientKeysPromise = null
+      const newProfileButton = document.createElement('button')
+      newProfileButton.dataset.action = 'new-client-profile'
+      const modalPending = handleContentClick({ target: newProfileButton })
+      while (!releaseModalKeys) await Promise.resolve()
+      state.route = 'billing'
+      $('#content').innerHTML = '<div id="client-modal-race-sentinel">billing</div>'
+      releaseModalKeys()
+      await modalPending
+      const modalStayedClosed = !$('#modal-root .modal') && Boolean($('#client-modal-race-sentinel'))
+      closeModal()
+      request = originalRequest
+      state.route = 'clients'
+      state.clientId = 'codex'
+      state.clientKeys = []
+      state.clientKeysPromise = null
+      return { routeStayedCurrent, clientStayedCurrent, modalStayedClosed }
+    })
+    if (!clientRaceSafety.routeStayedCurrent || !clientRaceSafety.clientStayedCurrent || !clientRaceSafety.modalStayedClosed) {
+      throw new Error(`stale client work painted after navigation: ${JSON.stringify(clientRaceSafety)}`)
+    }
+    await page.evaluate(() => navigate('clients'))
+    await page.waitForSelector('.client-config-page')
     await page.setViewportSize({ width: 980, height: 680 })
     const tabCount = await page.locator('[data-client-tab]').count()
     const title = await page.textContent('#page-title')
@@ -74,7 +133,7 @@ async function run() {
     await page.waitForFunction(() => document.documentElement.classList.contains('dark'))
     await page.evaluate(() => {
       state.clientId = 'codex'
-      state.keys = [{ id: 1, name: 'Sandbox Key', status: 'active', key: 'sk-sandbox-only' }]
+      state.clientKeys = [{ id: 1, name: 'Sandbox Key', status: 'active', key: 'sk-sandbox-only' }]
       createClientProfileModal()
     })
     const templateLabels = await page.locator('.template-field > span').allTextContents()
@@ -116,7 +175,7 @@ async function run() {
     console.log(JSON.stringify({ ok: true, tabCount, title, overflow, darkTheme: true, importedExisting: true, installHiddenWhenMissing: true, codexTemplateValid: true, websocketTemplateValid: true, openCodeTemplateValid: true, isolatedHome: true, templateGenerated: true }))
   } finally {
     await app.close()
-    await fs.rm(sandbox, { recursive: true, force: true })
+    await fs.rm(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 }
 

@@ -10,7 +10,11 @@ const state = {
   route: 'dashboard',
   user: null,
   settings: null,
-  keys: [],
+  keyItems: [],
+  keyReferences: [],
+  keyReferencePromise: null,
+  clientKeys: [],
+  keyCacheGeneration: 0,
   keyList: { page: 1, pageSize: 20, search: '', groupId: '', status: '', columns: { concurrency: true, todayUsage: true, monthUsage: true, expiresAt: true } },
   clientSelectedKeyId: null,
   groups: [],
@@ -421,17 +425,20 @@ function renderDashboardChart(points) {
 }
 
 async function renderDashboard() {
-  const [user, stats, snapshot, announcements] = await Promise.all([
-    request('/auth/me'),
+  const user = await request('/auth/me')
+  const [statsResult, snapshotResult, announcementsResult] = await Promise.allSettled([
     request('/usage/dashboard/stats'),
     request('/usage/dashboard/snapshot-v2?include_trend=true'),
     request('/announcements'),
   ])
+  const stats = statsResult.status === 'fulfilled' ? statsResult.value : null
+  const snapshot = snapshotResult.status === 'fulfilled' ? snapshotResult.value : null
+  const announcements = announcementsResult.status === 'fulfilled' ? announcementsResult.value : null
   state.user = user
   const name = user?.username || user?.email || '账户'
   $('#account-name').textContent = name
   $('#account-avatar').textContent = name.slice(0, 1).toUpperCase()
-  const noticeItems = paginated(announcements).items
+  const noticeItems = announcementsResult.status === 'fulfilled' ? paginated(announcements).items : []
   state.announcements = noticeItems
   const range = { start_date: snapshot?.start_date || '', end_date: snapshot?.end_date || '' }
   const [modelsResult, recentResult] = await Promise.allSettled([
@@ -442,13 +449,17 @@ async function renderDashboard() {
   const chartPoints = trend.slice(-30)
   const periodCost = chartPoints.reduce((sum, item) => sum + Number(item.actual_cost ?? item.cost ?? 0), 0)
   const periodRequests = chartPoints.reduce((sum, item) => sum + Number(item.requests ?? item.total_requests ?? 0), 0)
-  const chartBody = chartPoints.length
-    ? `<div class="chart-summary"><div class="chart-summary-item"><span>周期消费</span><strong>${money(periodCost)}</strong></div><div class="chart-summary-item secondary"><span>请求总数</span><strong>${number(periodRequests)} 次</strong></div></div><div class="chart-canvas-wrap"><canvas id="usage-trend-chart" aria-label="消费趋势折线图"></canvas></div>`
-    : '<div class="empty-state" style="width:100%;min-height:244px;border:0"><i data-lucide="chart-no-axes-column"></i><strong>暂无趋势数据</strong><p>产生调用后，这里会展示消费变化。</p></div>'
-  const notices = noticeItems.length
+  const chartBody = snapshotResult.status === 'rejected'
+    ? `<div class="usage-section-error dashboard-snapshot-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(snapshotResult.reason?.message || '趋势暂不可用')}</span></div>`
+    : chartPoints.length
+      ? `<div class="chart-summary"><div class="chart-summary-item"><span>周期消费</span><strong>${money(periodCost)}</strong></div><div class="chart-summary-item secondary"><span>请求总数</span><strong>${number(periodRequests)} 次</strong></div></div><div class="chart-canvas-wrap"><canvas id="usage-trend-chart" aria-label="消费趋势折线图"></canvas></div>`
+      : '<div class="empty-state" style="width:100%;min-height:244px;border:0"><i data-lucide="chart-no-axes-column"></i><strong>暂无趋势数据</strong><p>产生调用后，这里会展示消费变化。</p></div>'
+  const notices = announcementsResult.status === 'rejected'
+    ? `<div class="usage-section-error dashboard-announcements-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(announcementsResult.reason?.message || '公告暂不可用')}</span></div>`
+    : noticeItems.length
     ? noticeItems.slice(0, 5).map((item) => `<button class="announcement-row" data-action="announcement-detail" data-id="${escapeHTML(item.id)}"><span class="announcement-copy"><span class="announcement-title">${item.read_at ? '' : '<i class="announcement-unread" aria-label="未读"></i>'}<strong>${escapeHTML(item.title)}</strong></span><span>${escapeHTML(markdownPreview(item.content))}</span></span><time>${escapeHTML(shortDate(item.created_at))}</time><i data-lucide="chevron-right"></i></button>`).join('')
     : empty('bell-off', '暂无公告', '站点公告会显示在这里。')
-  const platformRows = (stats.by_platform || []).map((item) => `<div class="dashboard-breakdown-row"><strong>${escapeHTML(item.platform || '-')}</strong><span>${money(item.total_actual_cost)}</span><span>${number(item.total_requests)} 次</span><span>${compactNumber(item.total_tokens)} Token</span></div>`).join('')
+  const platformRows = (stats?.by_platform || []).map((item) => `<div class="dashboard-breakdown-row"><strong>${escapeHTML(item.platform || '-')}</strong><span>${money(item.total_actual_cost)}</span><span>${number(item.total_requests)} 次</span><span>${compactNumber(item.total_tokens)} Token</span></div>`).join('')
   const modelRows = modelsResult.status === 'fulfilled' ? (modelsResult.value?.models || modelsResult.value?.items || []).slice(0, 8).map((item) => `<div class="dashboard-breakdown-row"><strong>${escapeHTML(item.model || '-')}</strong><span>${money(item.actual_cost ?? item.total_actual_cost)}</span><span>${number(item.requests ?? item.total_requests)} 次</span><span>${compactNumber(item.total_tokens)} Token</span></div>`).join('') : ''
   const recentRows = recentResult.status === 'fulfilled' ? paginated(recentResult.value).items.slice(0, 5).map((item) => `<div class="dashboard-recent-row"><strong>${escapeHTML(item.model || '-')}</strong><span>${number(Number(item.input_tokens || 0) + Number(item.output_tokens || 0))} Token</span><span>${money(item.actual_cost)}</span><time>${escapeHTML(dateTime(item.created_at))}</time></div>`).join('') : ''
   const localUnavailable = (message) => `<div class="usage-section-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(message || '暂不可用')}</span></div>`
@@ -456,14 +467,15 @@ async function renderDashboard() {
   $('#content').innerHTML = `<div class="page-stack">
     <div class="metrics-grid">
       ${metric('余额', money(user.balance), user.frozen_balance ? `冻结 ${money(user.frozen_balance)}` : '当前可用额度', 'wallet', 'green')}
-      ${metric('API 密钥', number(stats.active_api_keys), `${number(stats.total_api_keys)} 个启用`, 'key-round', 'blue')}
+      ${stats ? `${metric('API 密钥', number(stats.active_api_keys), `${number(stats.total_api_keys)} 个启用`, 'key-round', 'blue')}
       ${metric('今日请求', compactNumber(stats.today_requests), `累计 ${compactNumber(stats.total_requests)}`, 'chart-no-axes-combined', 'green')}
       ${metric('今日消费', money(stats.today_actual_cost), `累计 ${money(stats.total_actual_cost)}`, 'circle-dollar-sign', 'purple')}
       ${metric('今日 Token', compactNumber(stats.today_tokens), `输入 ${compactNumber(stats.today_input_tokens)} / 输出 ${compactNumber(stats.today_output_tokens)}`, 'binary', 'amber')}
       ${metric('累计 Token', compactNumber(stats.total_tokens), `输入 ${compactNumber(stats.total_input_tokens)} / 输出 ${compactNumber(stats.total_output_tokens)}`, 'database', 'blue')}
       ${metric('性能指标', `${compactNumber(stats.rpm)} RPM`, `${compactNumber(stats.tpm)} TPM`, 'zap', 'purple')}
-      ${metric('平均响应', `${(Number(stats.average_duration_ms || 0) / 1000).toFixed(2)}s`, '平均响应时间', 'clock-3', 'red')}
+      ${metric('平均响应', `${(Number(stats.average_duration_ms || 0) / 1000).toFixed(2)}s`, '平均响应时间', 'clock-3', 'red')}` : ''}
     </div>
+    ${statsResult.status === 'rejected' ? `<div class="usage-section-error dashboard-stats-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(statsResult.reason?.message || '统计暂不可用')}</span></div>` : ''}
     <section class="official-ad" aria-label="AIHub 官网推广">
       <img src="../../assets/icon.png" alt="AIHub" />
       <div class="official-ad-copy">
@@ -478,7 +490,7 @@ async function renderDashboard() {
     </section>
     <div class="dashboard-grid single-dashboard-panel"><section class="panel"><div class="panel-header"><div><h2>消费趋势</h2><p>${escapeHTML(snapshot?.start_date || '')} 至 ${escapeHTML(snapshot?.end_date || '')}</p></div><button class="icon-button" data-route-jump="usage" title="查看用量"><i data-lucide="arrow-up-right"></i></button></div><div class="panel-body">${chartBody}</div></section></div>
     <section class="dashboard-parity-grid">
-      <section class="panel"><div class="panel-header"><h2>按平台拆分</h2></div><div class="panel-body dashboard-breakdown">${platformRows || '<span class="muted">暂无平台数据</span>'}</div></section>
+      <section class="panel"><div class="panel-header"><h2>按平台拆分</h2></div><div class="panel-body dashboard-breakdown">${statsResult.status === 'fulfilled' ? (platformRows || '<span class="muted">暂无平台数据</span>') : localUnavailable(statsResult.reason?.message)}</div></section>
       <section class="panel"><div class="panel-header"><h2>模型分布</h2></div><div class="panel-body dashboard-breakdown">${modelsResult.status === 'fulfilled' ? (modelRows || '<span class="muted">暂无模型数据</span>') : localUnavailable(modelsResult.reason?.message)}</div></section>
       <section class="panel"><div class="panel-header"><h2>最近使用</h2></div><div class="panel-body dashboard-breakdown">${recentResult.status === 'fulfilled' ? (recentRows || '<span class="muted">暂无使用记录</span>') : localUnavailable(recentResult.reason?.message)}</div></section>
     </section>
@@ -509,7 +521,7 @@ async function renderKeys() {
     request('/groups/available'),
   ])
   const keys = paginated(keysData)
-  state.keys = keys.items
+  state.keyItems = keys.items
   state.groups = Array.isArray(groupsData) ? groupsData : groupsData?.groups || groupsData?.items || []
   const visible = state.keyList.columns
   const optionalHeaders = [
@@ -528,7 +540,7 @@ async function renderKeys() {
   const columnToggles = [['concurrency', '并发'], ['todayUsage', '今日用量'], ['monthUsage', '30 天用量'], ['expiresAt', '到期时间']].map(([name, label]) => `<label class="key-column-toggle"><input type="checkbox" data-key-column="${name}" ${visible[name] ? 'checked' : ''} />${label}</label>`).join('')
   $('#content').innerHTML = `<div class="page-stack"><div class="page-toolbar"><div class="toolbar-copy"><h2>你的访问凭据</h2><p>管理调用权限、限额与故障转移策略。</p></div><button class="primary-button" data-action="create-key"><i data-lucide="plus"></i>新建 Key</button></div><section class="panel key-list-panel"><form id="key-list-filters" class="key-list-filters"><input name="key-search" value="${escapeHTML(state.keyList.search)}" placeholder="搜索 Key 名称" /><select name="key-group-filter"><option value="">全部分组</option>${groupOptions}</select><select name="key-status-filter"><option value="">全部状态</option><option value="active" ${state.keyList.status === 'active' ? 'selected' : ''}>active</option><option value="inactive" ${state.keyList.status === 'inactive' ? 'selected' : ''}>inactive</option></select><select name="key-page-size"><option value="20" ${state.keyList.pageSize === 20 ? 'selected' : ''}>20 / 页</option><option value="50" ${state.keyList.pageSize === 50 ? 'selected' : ''}>50 / 页</option><option value="100" ${state.keyList.pageSize === 100 ? 'selected' : ''}>100 / 页</option></select><button type="button" class="secondary-button" data-action="key-apply-filters"><i data-lucide="search"></i>筛选</button></form><div class="key-list-tools"><div class="key-column-toggles">${columnToggles}</div><div class="key-endpoints"><a data-key-endpoint href="https://aihub.top/v1" target="_blank" rel="noreferrer">默认 API</a><button class="icon-button" data-action="copy-key-endpoint" data-endpoint="https://aihub.top/v1" title="复制默认 API" aria-label="复制默认 API"><i data-lucide="copy"></i></button><a data-key-endpoint href="https://aihub.top/v1/images/generations" target="_blank" rel="noreferrer">图片 API</a><button class="icon-button" data-action="copy-key-endpoint" data-endpoint="https://aihub.top/v1/images/generations" title="复制图片 API" aria-label="复制图片 API"><i data-lucide="copy"></i></button><button class="icon-button" data-action="test-key-endpoint" data-endpoint="https://aihub.top/v1" title="测速" aria-label="测速"><i data-lucide="gauge"></i></button></div></div>${rows ? `<div class="data-table-wrap"><table class="data-table key-list-table"><thead><tr><th>名称</th><th>状态</th><th>分组</th><th>额度</th>${optionalHeaders}<th>最后使用</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : empty('key-round', '还没有 API Key', '创建一个 Key 后即可连接客户端。', '<button class="primary-button" data-action="create-key"><i data-lucide="plus"></i>新建 Key</button>')}${keyListPagination(keys.total, keys.pages)}</section></div>`
   $$('[data-action="configure-client-key"]', $('#content')).forEach((button) => {
-    const key = state.keys.find((item) => String(item.id) === button.dataset.id)
+    const key = state.keyItems.find((item) => String(item.id) === button.dataset.id)
     if (key?.status !== 'active') button.remove()
   })
   icons($('#content'))
@@ -573,10 +585,10 @@ async function renderUsage() {
   const analytics = state.usageAnalytics
   const overviewQuery = usageOverviewQuery(analytics)
   const referenceLoads = []
-  if (!state.keys.length) referenceLoads.push(request('/keys?page=1&page_size=100').then((data) => { state.keys = paginated(data).items }))
+  if (!state.keyReferences.length) referenceLoads.push(ensureKeyReferences())
   if (!state.groups.length) referenceLoads.push(request('/groups/available').then((data) => { state.groups = Array.isArray(data) ? data : data?.items || data?.groups || [] }))
   if (referenceLoads.length) await Promise.allSettled(referenceLoads)
-  const [stats, logs] = await Promise.all([
+  const [statsResult, logsResult] = await Promise.allSettled([
     request(`/usage/stats?${overviewQuery}`),
     request(`/usage?${usageDetailQuery(analytics)}`),
   ])
@@ -584,11 +596,12 @@ async function renderUsage() {
     request(`/usage/dashboard/snapshot-v2?${queryString({ ...usageFilterParams(analytics), granularity: analytics.granularity, include_trend: true, include_model_stats: false, include_group_stats: true })}`),
     request(`/usage/dashboard/models?${queryString({ ...usageFilterParams(analytics), model_source: 'requested' })}`),
   ])
-  const page = paginated(logs)
+  const stats = statsResult.status === 'fulfilled' ? statsResult.value : null
+  const page = logsResult.status === 'fulfilled' ? paginated(logsResult.value) : { items: [], total: 0, pages: 1 }
   const items = page.items
   state.usageItems = items
-  const cacheReadTokens = Number(stats.cache_read_tokens ?? stats.total_cache_read_tokens ?? 0)
-  const cacheCreationTokens = Number(stats.cache_creation_tokens ?? stats.total_cache_creation_tokens ?? 0)
+  const cacheReadTokens = Number(stats?.cache_read_tokens ?? stats?.total_cache_read_tokens ?? 0)
+  const cacheCreationTokens = Number(stats?.cache_creation_tokens ?? stats?.total_cache_creation_tokens ?? 0)
   const rows = items.map((item) => `<tr data-action="usage-detail" data-id="${escapeHTML(item.id)}" class="usage-detail-row">
     <td style="width:18%"><div class="cell-title"><strong>${escapeHTML(item.model || '未知模型')}</strong><span>${escapeHTML(item.request_id || '')}</span></div></td>
     <td style="width:13%">${escapeHTML(item.api_key?.name || `Key #${item.api_key_id}`)}</td>
@@ -605,11 +618,13 @@ async function renderUsage() {
     : usageSectionError('模型分布', modelsResult.reason?.message)
   const snapshot = snapshotResult.status === 'fulfilled' ? snapshotResult.value : null
   const groupSection = snapshot ? usageDistribution('分组使用分布', snapshot.groups || [], 'name') : usageSectionError('分组使用分布', snapshotResult.reason?.message)
-  const endpointSection = usageDistribution('端点分布', stats.endpoints || [], 'inbound_endpoint')
+  const endpointSection = statsResult.status === 'fulfilled'
+    ? usageDistribution('端点分布', stats.endpoints || [], 'inbound_endpoint')
+    : usageSectionError('端点分布', statsResult.reason?.message)
   const trendRows = (snapshot?.trend || []).map((item) => `<div class="usage-trend-row"><strong>${escapeHTML(item.date || item.time || '-')}</strong><span>输入 ${number(item.input_tokens)}</span><span>输出 ${number(item.output_tokens)}</span><span>${money(item.actual_cost)}</span></div>`).join('')
   const trendSection = snapshot ? `<section class="panel usage-trend"><div class="panel-header"><div><h2>Token 使用趋势</h2><p>按${analytics.granularity === 'hour' ? '小时' : '天'}聚合</p></div></div><div class="panel-body">${trendRows || '<span class="muted">暂无趋势数据</span>'}</div></section>` : usageSectionError('Token 使用趋势', snapshotResult.reason?.message)
   const usagePagination = `<div class="pagination-bar"><span>共 ${number(page.total)} 条 · 每页 ${number(analytics.pageSize)} 条</span><div class="pagination-controls"><button class="icon-button" data-action="usage-prev" aria-label="上一页" ${analytics.page <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button><strong>${number(analytics.page)} / ${number(page.pages || 1)}</strong><button class="icon-button" data-action="usage-next" aria-label="下一页" ${analytics.page >= (page.pages || 1) ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button></div></div>`
-  const keyOptions = state.keys.map((key) => `<option value="${escapeHTML(key.id)}" ${String(analytics.filters.api_key_id) === String(key.id) ? 'selected' : ''}>${escapeHTML(key.name)}</option>`).join('')
+  const keyOptions = state.keyReferences.map((key) => `<option value="${escapeHTML(key.id)}" ${String(analytics.filters.api_key_id) === String(key.id) ? 'selected' : ''}>${escapeHTML(key.name)}</option>`).join('')
   const groupOptions = state.groups.map((group) => `<option value="${escapeHTML(group.id)}" ${String(analytics.filters.group_id) === String(group.id) ? 'selected' : ''}>${escapeHTML(group.name)}</option>`).join('')
   $('#content').innerHTML = `<div class="page-stack">
     <div class="page-toolbar"><div class="toolbar-copy"><h2>调用与消费</h2><p>仅显示你自己的调用记录。</p></div><div class="button-row"><button class="secondary-button" data-action="usage-region-refresh-all"><i data-lucide="map-pin"></i>刷新地区</button><button class="secondary-button" data-action="export-usage"><i data-lucide="download"></i>导出 CSV</button></div></div>
@@ -621,16 +636,16 @@ async function renderUsage() {
       <label><span>计费类型</span><select name="billing_type"><option value="">全部</option><option value="payg" ${analytics.filters.billing_type === 'payg' ? 'selected' : ''}>payg</option></select></label><label><span>计费模式</span><select name="billing_mode"><option value="">全部</option><option value="actual" ${analytics.filters.billing_mode === 'actual' ? 'selected' : ''}>actual</option></select></label>
       <div class="button-row usage-filter-actions"><button type="submit" class="primary-button"><i data-lucide="list-filter"></i>应用筛选</button></div>
     </form></section>
-    <div class="metrics-grid usage-metrics">
+    ${stats ? `<div class="metrics-grid usage-metrics">
       ${metric('实际消费', money(stats.actual_cost ?? stats.total_actual_cost), '所选周期', 'circle-dollar-sign')}
       ${metric('请求数', number(stats.requests ?? stats.total_requests), '全部模型', 'send', 'green')}
       ${metric('输入 Token', number(stats.input_tokens ?? stats.total_input_tokens), '提示与上下文', 'arrow-down-to-line', 'amber')}
       ${metric('输出 Token', number(stats.output_tokens ?? stats.total_output_tokens), '模型生成', 'arrow-up-from-line', 'dark')}
       ${metric('缓存 Token', number(cacheReadTokens + cacheCreationTokens), `读取 ${number(cacheReadTokens)} · 写入 ${number(cacheCreationTokens)}`, 'database-zap', 'green')}
-    </div>
+    </div>` : `<div class="usage-section-error usage-stats-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(statsResult.reason?.message || '用量统计暂不可用')}</span></div>`}
     <section class="usage-distribution-grid">${modelSection}${groupSection}${endpointSection}</section>
     ${trendSection}
-    <section class="panel"><div class="panel-header"><div><h2>最近调用</h2><p>${number(page.total)} 条记录 · 标准成本 ${money(stats.standard_cost ?? stats.original_cost)}</p></div></div>${rows ? `<div class="data-table-wrap"><table class="data-table usage-detail-table"><thead><tr><th>模型</th><th>API Key</th><th>输入 / 输出</th><th>缓存读 / 写</th><th>消费</th><th>耗时</th><th>端点</th><th>IP / 地区</th><th>时间</th></tr></thead><tbody>${rows}</tbody></table></div>${usagePagination}` : empty('activity', '暂无调用记录', '使用 API Key 发起请求后会显示在这里。')}</section>
+    ${logsResult.status === 'fulfilled' ? `<section class="panel usage-detail-panel"><div class="panel-header"><div><h2>最近调用</h2><p>${number(page.total)} 条记录${stats ? ` · 标准成本 ${money(stats.standard_cost ?? stats.original_cost)}` : ''}</p></div></div>${rows ? `<div class="data-table-wrap"><table class="data-table usage-detail-table"><thead><tr><th>模型</th><th>API Key</th><th>输入 / 输出</th><th>缓存读 / 写</th><th>消费</th><th>耗时</th><th>端点</th><th>IP / 地区</th><th>时间</th></tr></thead><tbody>${rows}</tbody></table></div>${usagePagination}` : empty('activity', '暂无调用记录', '使用 API Key 发起请求后会显示在这里。')}</section>` : `<section class="panel usage-detail-panel"><div class="panel-header"><h2>最近调用</h2></div><div class="panel-body usage-section-error usage-details-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(logsResult.reason?.message || '调用明细暂不可用')}</span></div></section>`}
   </div>`
   icons($('#content'))
 }
@@ -757,10 +772,7 @@ async function loadUsageForExport() {
 async function renderLogs() {
   const logState = state.logs
   const isFailover = logState.mode === 'failover'
-  if (!state.keys.length) {
-    const keyData = await request('/keys?page=1&page_size=100')
-    state.keys = paginated(keyData).items
-  }
+  if (!state.keyReferences.length) await ensureKeyReferences()
   if (!state.groups.length) {
     const groups = await request('/groups/available')
     state.groups = Array.isArray(groups) ? groups : groups?.items || groups?.groups || []
@@ -774,7 +786,7 @@ async function renderLogs() {
     ? `/usage/failovers?${queryString(params)}`
     : `/usage?${queryString({ ...params, sort_by: 'created_at', sort_order: 'desc' })}`))
   state.currentLogs = logs.items
-  const keyOptions = state.keys.map((key) => `<option value="${key.id}" ${String(logState.filters.api_key_id || '') === String(key.id) ? 'selected' : ''}>${escapeHTML(key.name)}</option>`).join('')
+  const keyOptions = state.keyReferences.map((key) => `<option value="${key.id}" ${String(logState.filters.api_key_id || '') === String(key.id) ? 'selected' : ''}>${escapeHTML(key.name)}</option>`).join('')
   const groupOptions = state.groups.map((group) => `<option value="${group.id}" ${String(logState.filters.group_id || '') === String(group.id) ? 'selected' : ''}>${escapeHTML(group.name)}</option>`).join('')
   const rows = logs.items.map((item) => {
     const totalTokens = Number(item.input_tokens || 0) + Number(item.output_tokens || 0)
@@ -843,13 +855,16 @@ function sortedProviders(items, sort = state.providerSort) {
 
 function providerMetricPoints(series, metric = state.providerMetric) {
   const index = metric === 'tps' ? 3 : metric === 'input_tokens' ? 4 : 2
-  return (Array.isArray(series) ? series : []).map((point) => finiteProviderValue(point?.[index])).filter((value) => value !== null)
+  return (Array.isArray(series) ? series : []).map((point) => ({
+    label: String(point?.[0] || ''),
+    value: finiteProviderValue(point?.[index]),
+  })).filter((point) => point.label && point.value !== null)
 }
 
 function providerSparkline(item, series) {
   const points = providerMetricPoints(series)
   if (!points.length) return '<span class="provider-series-unavailable">暂无趋势</span>'
-  return `<div class="provider-sparkline" data-rates="${escapeHTML(JSON.stringify(points))}"><canvas width="150" height="34" aria-label="${escapeHTML(item.planType)} 指标趋势"></canvas></div>`
+  return `<div class="provider-sparkline" data-labels="${escapeHTML(JSON.stringify(points.map((point) => point.label)))}" data-rates="${escapeHTML(JSON.stringify(points.map((point) => point.value)))}"><canvas width="150" height="34" aria-label="${escapeHTML(item.planType)} 指标趋势"></canvas></div>`
 }
 
 function providerCacheHitLabel(value) {
@@ -870,12 +885,13 @@ function renderProviderSparklines() {
   state.providerCharts = []
   $$('.provider-sparkline').forEach((container) => {
     const canvas = $('canvas', container)
+    const labels = JSON.parse(container.dataset.labels || '[]')
     const rates = JSON.parse(container.dataset.rates || '[]')
     if (!canvas || !window.Chart) return
     const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent-cyan').trim() || '#12b8c4'
     state.providerCharts.push(new window.Chart(canvas, {
       type: 'line',
-      data: { labels: ['6h', '24h', '7d', '30d'], datasets: [{ data: rates, borderColor: accent, borderWidth: 1.8, pointRadius: 0, pointHoverRadius: 3, tension: .34, fill: false }] },
+      data: { labels, datasets: [{ data: rates, borderColor: accent, borderWidth: 1.8, pointRadius: 0, pointHoverRadius: 3, tension: .34, fill: false }] },
       options: { responsive: false, animation: false, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false } }, elements: { line: { capBezierPoints: true } } },
     }))
   })
@@ -928,16 +944,83 @@ function clientTargetRows(clientState) {
   </div>`).join('')
 }
 
+async function loadAllKeys(pageSize, extraParams = {}) {
+  const normalizedPageSize = Number.isFinite(Number(pageSize)) && Number(pageSize) > 0 ? Math.floor(Number(pageSize)) : 100
+  const maxPagesLimit = 50
+  const maxItemsLimit = 5000
+  const items = []
+  const seenIds = new Set()
+  let page = 1
+  let maxPages = 1
+  do {
+    const data = paginated(await request(`/keys?${queryString({ page, page_size: pageSize, ...extraParams })}`))
+    const pageItems = Array.isArray(data.items) ? data.items : []
+    if (!pageItems.length) break
+    if (page === 1) {
+      const declaredPages = Number(data.pages)
+      const declaredTotal = Number(data.total)
+      const pageLimits = []
+      if (Number.isFinite(declaredPages) && Number.isInteger(declaredPages) && declaredPages > 0) pageLimits.push(declaredPages)
+      if (Number.isFinite(declaredTotal) && Number.isInteger(declaredTotal) && declaredTotal >= 0) pageLimits.push(Math.max(1, Math.ceil(declaredTotal / normalizedPageSize)))
+      maxPages = Math.min(maxPagesLimit, ...(pageLimits.length ? pageLimits : [1]))
+    }
+    let added = 0
+    for (const item of pageItems) {
+      if (item?.id == null) continue
+      const id = String(item.id)
+      if (seenIds.has(id)) continue
+      seenIds.add(id)
+      items.push(item)
+      added += 1
+      if (items.length >= maxItemsLimit) break
+    }
+    if (!added || items.length >= maxItemsLimit) break
+    page += 1
+  } while (page <= maxPages)
+  return items
+}
+
+function invalidateKeyCaches() {
+  state.keyCacheGeneration += 1
+  state.keyReferences = []
+  state.clientKeys = []
+  state.keyReferencePromise = null
+  state.clientKeysPromise = null
+}
+
+async function ensureKeyReferences() {
+  if (state.keyReferences.length) return state.keyReferences
+  if (!state.keyReferencePromise) {
+    const generation = state.keyCacheGeneration
+    const pending = loadAllKeys(100)
+      .then((items) => {
+        if (state.keyCacheGeneration !== generation) return []
+        state.keyReferences = items
+        return state.keyReferences
+      })
+      .finally(() => {
+        if (state.keyReferencePromise === pending) state.keyReferencePromise = null
+      })
+    state.keyReferencePromise = pending
+  }
+  return state.keyReferencePromise
+}
+
 async function ensureClientKeys() {
-  if (state.keys.length) return state.keys
+  if (state.clientKeys.length) return state.clientKeys
   if (!state.clientKeysPromise) {
-    state.clientKeysPromise = request('/keys?page=1&page_size=50&sort_by=created_at&sort_order=desc')
-      .then((data) => {
-        state.keys = paginated(data).items
-        return state.keys
+    const generation = state.keyCacheGeneration
+    const pending = loadAllKeys(50, { sort_by: 'created_at', sort_order: 'desc' })
+      .then((items) => {
+        if (state.keyCacheGeneration !== generation) return []
+        state.clientKeys = items
+        return state.clientKeys
       })
       .catch(() => [])
-      .finally(() => { state.clientKeysPromise = null })
+      .finally(() => {
+        if (state.clientKeysPromise === pending) state.clientKeysPromise = null
+      })
+    state.clientKeysPromise = pending
   }
   return state.clientKeysPromise
 }
@@ -1009,17 +1092,21 @@ function prefetchOtherClients() {
 }
 
 async function renderClients() {
+  const requestedRoute = state.route
+  let requestedClientId = state.clientId
   if (!state.clientDefinitions.length) {
     const clients = await ccRequest('listClients')
+    if (state.route !== requestedRoute || state.clientId !== requestedClientId) return
     state.clientDefinitions = Array.isArray(clients) ? clients : []
   }
   if (!state.clientDefinitions.some((item) => item.id === state.clientId)) state.clientId = state.clientDefinitions[0]?.id || 'codex'
+  requestedClientId = state.clientId
+  await ensureClientKeys().catch(() => [])
+  if (state.route !== 'clients' || state.route !== requestedRoute || state.clientId !== requestedClientId) return
   const selected = state.clientDefinitions.find((item) => item.id === state.clientId) || { id: state.clientId, label: state.clientId, targets: [] }
-  const requestedClientId = state.clientId
   const cached = state.clientCache[requestedClientId]
   if (cached) paintClients(selected, cached)
   else renderClientLoading(selected)
-  ensureClientKeys().catch(() => {})
   const data = await loadClientData(requestedClientId)
   if (state.route !== 'clients' || state.clientId !== requestedClientId) return
   paintClients(selected, data)
@@ -1136,7 +1223,7 @@ function openFailoverDetail(id) {
 function redeemHistoryTitle(item) {
   if (item.type === 'balance') return '余额充值（兑换）'
   if (item.type === 'concurrency') return '并发增加（兑换）'
-  if (item.type === 'subscription') return '套餐已分配'
+  if (item.type === 'subscription') return '限时权益已发放'
   if (item.type === 'admin_balance') return item.value >= 0 ? '余额充值（管理员）' : '余额扣除（管理员）'
   if (item.type === 'admin_concurrency') return item.value >= 0 ? '并发增加（管理员）' : '并发减少（管理员）'
   return '兑换记录'
@@ -1154,7 +1241,7 @@ async function renderRedeem() {
   const history = paginated(historyData).items
   const rows = history.map((item) => `<div class="redeem-activity-row"><div class="redeem-activity-icon ${item.type?.includes('concurrency') ? 'blue' : 'green'}"><i data-lucide="${item.type?.includes('concurrency') ? 'zap' : 'circle-dollar-sign'}"></i></div><div class="redeem-activity-copy"><strong>${escapeHTML(redeemHistoryTitle(item))}</strong><span>${escapeHTML(dateTime(item.used_at || item.created_at))}</span></div><div class="redeem-activity-value"><strong>${redeemHistoryValue(item)}</strong><span>${item.code ? escapeHTML(`${String(item.code).slice(0, 8)}...`) : '管理员调整'}</span></div></div>`).join('')
   $('#content').innerHTML = `<div class="page-stack redeem-page">
-    <section class="redeem-hero"><div><p class="eyebrow">REDEEM CODE</p><h2>兑换码</h2><p>兑换余额、并发额度或套餐权益，到账后会立即更新账户。</p></div><div class="redeem-balance"><span>当前余额</span><strong>${money(user.balance)}</strong><small>并发 ${number(user.concurrency)} 请求</small></div></section>
+    <section class="redeem-hero"><div><p class="eyebrow">REDEEM CODE</p><h2>兑换码</h2><p>兑换余额、并发额度或其他账户权益，到账后会立即更新账户。</p></div><div class="redeem-balance"><span>当前余额</span><strong>${money(user.balance)}</strong><small>并发 ${number(user.concurrency)} 请求</small></div></section>
     <section class="panel redeem-form-panel"><div class="panel-header"><div><h2>输入兑换码</h2><p>每个兑换码只能使用一次</p></div></div><div class="panel-body"><form id="redeem-form" class="redeem-form"><input name="code" placeholder="请输入兑换码" autocomplete="off" required /><button class="primary-button" type="submit"><i data-lucide="ticket-check"></i>立即兑换</button></form></div></section>
     <section class="redeem-guide"><div class="redeem-guide-icon"><i data-lucide="info"></i></div><div><strong>关于兑换码</strong><ul><li>每个兑换码只能使用一次</li><li>兑换码可以增加余额、并发数或试用权限</li><li>如有兑换问题，请联系客服 <span class="contact-pill">Tg：@DEWENBOSS</span></li><li>余额和并发数兑换后即时更新</li></ul></div></section>
     <section class="panel"><div class="panel-header"><div><h2>最近活动</h2><p>${number(history.length)} 条兑换与账户调整记录</p></div></div><div class="panel-body redeem-activity-list">${rows || empty('clock-3', '暂无活动记录', '兑换成功后，记录会显示在这里。')}</div></section>
@@ -1165,8 +1252,8 @@ async function renderRedeem() {
 async function renderBilling() {
   const orderState = state.orders
   const orderQuery = queryString({ page: orderState.page, page_size: orderState.pageSize, status: orderState.status })
-  const [ordersData, paymentConfig, checkout, user] = await Promise.all([
-    request(`/payment/orders/my?${orderQuery}`).catch(() => ({ items: [], total: 0, pages: 1 })),
+  const [ordersResult, paymentConfig, checkout, user] = await Promise.all([
+    request(`/payment/orders/my?${orderQuery}`).then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason })),
     request('/payment/config').catch((error) => ({ payment_enabled: false, unavailable_reason: error.message })),
     request('/payment/checkout-info').catch(() => ({ methods: {}, plans: [], balance_disabled: true, balance_recharge_multiplier: 1, recharge_fee_rate: 0 })),
     request('/auth/me'),
@@ -1177,25 +1264,30 @@ async function renderBilling() {
   const enabledMethods = methods.filter((item) => item.available !== false)
   if (!enabledMethods.some((item) => item.type === state.payment.selectedMethod)) state.payment.selectedMethod = enabledMethods[0]?.type || ''
   const rechargeEnabled = paymentConfig?.payment_enabled !== false && checkout?.balance_disabled !== true && enabledMethods.length > 0
-  const orderPage = paginated(ordersData)
+  const orderPage = ordersResult.status === 'fulfilled' ? paginated(ordersResult.value) : { items: [], total: 0, pages: 1 }
   const orders = orderPage.items
   const orderRows = orders.map((item) => {
     const pending = String(item.status).toUpperCase() === 'PENDING'
     return `<tr><td><div class="cell-title"><strong>${escapeHTML(item.out_trade_no || `订单 #${item.id}`)}</strong><span>${escapeHTML(paymentMethodLabel(PAYMENT_METHOD_ALIASES[item.payment_type] || item.payment_type, item.payment_type))}</span></div></td><td><div class="cell-title"><strong>${escapeHTML(gatewayMoney(item.pay_amount ?? item.amount, item.currency || 'CNY'))}</strong><span>到账 ${money(item.amount)}</span></div></td><td><span class="status-badge ${escapeHTML(paymentStatusClass(item.status))}">${escapeHTML(paymentStatusLabel(item.status))}</span></td><td>${escapeHTML(dateTime(item.created_at))}</td><td><div class="table-actions">${pending && item.out_trade_no ? `<button class="icon-button" data-action="verify-payment-order" data-order-no="${escapeHTML(item.out_trade_no)}" title="查询支付状态" aria-label="查询支付状态"><i data-lucide="refresh-cw"></i></button>` : ''}${pending ? `<button class="icon-button" data-action="cancel-payment-order" data-id="${escapeHTML(item.id)}" title="取消订单" aria-label="取消订单"><i data-lucide="x"></i></button>` : ''}</div></td></tr>`
   }).join('')
+  const orderBody = ordersResult.status === 'rejected'
+    ? `<div class="panel-body usage-section-error payment-orders-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(ordersResult.reason?.message || '订单记录暂不可用')}</span><button class="secondary-button" data-action="retry-orders"><i data-lucide="refresh-cw"></i>重试</button></div>`
+    : `${orderRows ? `<div class="data-table-wrap"><table class="data-table payment-orders"><thead><tr><th>订单号</th><th>金额</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${orderRows}</tbody></table></div>` : empty('receipt', '暂无订单', '创建充值订单后会显示在这里。')}<div class="pagination-bar"><span>共 ${number(orderPage.total)} 条</span><div class="pagination-controls"><button class="icon-button" data-action="orders-prev" aria-label="上一页" ${orderState.page <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button><strong>${number(orderState.page)} / ${number(orderPage.pages || 1)}</strong><button class="icon-button" data-action="orders-next" aria-label="下一页" ${orderState.page >= (orderPage.pages || 1) ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button></div></div>`
+  const rechargeDraft = $('#recharge-amount')?.value ?? '20'
+  const restoreRechargeFocus = document.activeElement?.id === 'recharge-amount'
   $('#content').innerHTML = `<div class="page-stack">
     <div class="metrics-grid">
-      ${metric('历史订单', number(paginated(ordersData).total), '仅你的订单', 'receipt-text')}
+      ${metric('历史订单', ordersResult.status === 'fulfilled' ? number(orderPage.total) : '-', ordersResult.status === 'fulfilled' ? '仅你的订单' : '订单记录暂不可用', 'receipt-text')}
       ${metric('账户余额', money(user?.balance), rechargeEnabled ? '可在线充值' : '在线充值暂不可用', 'wallet-cards', rechargeEnabled ? 'green' : 'dark')}
-      ${metric('待处理订单', number(orders.filter((item) => String(item.status).toUpperCase() === 'PENDING').length), '等待支付确认', 'clock-3', 'amber')}
-      ${metric('已完成订单', number(orders.filter((item) => String(item.status).toUpperCase() === 'COMPLETED').length), '最近 20 笔订单', 'circle-check', 'green')}
+      ${metric('待处理订单', ordersResult.status === 'fulfilled' ? number(orders.filter((item) => String(item.status).toUpperCase() === 'PENDING').length) : '-', ordersResult.status === 'fulfilled' ? '等待支付确认' : '订单记录暂不可用', 'clock-3', 'amber')}
+      ${metric('已完成订单', ordersResult.status === 'fulfilled' ? number(orders.filter((item) => String(item.status).toUpperCase() === 'COMPLETED').length) : '-', ordersResult.status === 'fulfilled' ? '最近 20 笔订单' : '订单记录暂不可用', 'circle-check', 'green')}
     </div>
     <section class="panel recharge-panel">
       <div class="panel-header"><div><h2>在线充值</h2><p>由 AIHub 官方支付系统处理，到账后自动更新余额</p></div><span class="status-badge ${rechargeEnabled ? 'active' : 'inactive'}">${rechargeEnabled ? '可用' : '未开放'}</span></div>
       ${rechargeEnabled ? `<form id="recharge-form" class="recharge-layout">
         <div class="recharge-controls">
-          <label><span>充值金额</span><div class="amount-input"><span>$</span><input id="recharge-amount" name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" value="20" required /></div></label>
-          <div class="amount-presets" aria-label="快捷金额">${[10, 20, 50, 100, 200, 500].map((amount) => `<button type="button" data-action="set-recharge-amount" data-amount="${amount}" class="${amount === 20 ? 'active' : ''}">$${amount}</button>`).join('')}</div>
+          <label><span>充值金额</span><div class="amount-input"><span>$</span><input id="recharge-amount" name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" value="${escapeHTML(rechargeDraft)}" required /></div></label>
+          <div class="amount-presets" aria-label="快捷金额">${[10, 20, 50, 100, 200, 500].map((amount) => `<button type="button" data-action="set-recharge-amount" data-amount="${amount}" class="${Number(rechargeDraft) === amount ? 'active' : ''}">$${amount}</button>`).join('')}</div>
           <fieldset class="payment-methods"><legend>支付方式</legend>${enabledMethods.map((item) => `<button type="button" class="payment-method ${item.type === state.payment.selectedMethod ? 'active' : ''}" data-action="select-payment-method" data-method="${escapeHTML(item.type)}"><i data-lucide="${paymentMethodIcon(item.type)}"></i><span><strong>${escapeHTML(item.display_name || paymentMethodLabel(item.type))}</strong><small>${item.single_min > 0 || item.single_max > 0 ? `${item.single_min > 0 ? `最低 ${gatewayMoney(item.single_min, item.currency)}` : ''}${item.single_min > 0 && item.single_max > 0 ? ' · ' : ''}${item.single_max > 0 ? `最高 ${gatewayMoney(item.single_max, item.currency)}` : ''}` : '按渠道实时结算'}</small></span><i data-lucide="check"></i></button>`).join('')}</fieldset>
           <p id="recharge-error" class="form-error hidden" role="alert"></p>
         </div>
@@ -1209,10 +1301,14 @@ async function renderBilling() {
         </aside>
       </form>` : empty('wallet-cards', '在线充值暂不可用', paymentConfig?.unavailable_reason || (paymentConfig?.payment_enabled === false ? 'AIHub 当前未启用在线支付。' : checkout?.balance_disabled ? 'AIHub 当前关闭了余额充值。' : 'AIHub 当前没有可用支付渠道。'))}
     </section>
-    <section class="panel"><div class="panel-header payment-orders-header"><div><h2>订单记录</h2><p>支付与退款状态</p></div><div class="order-filter-controls"><select name="order-status" aria-label="订单状态"><option value="">全部状态</option>${['PENDING','COMPLETED','FAILED','REFUNDED'].map((status) => `<option value="${status}" ${orderState.status === status ? 'selected' : ''}>${paymentStatusLabel(status)}</option>`).join('')}</select><select name="order-page-size" aria-label="每页数量">${[20,50,100].map((size) => `<option value="${size}" ${orderState.pageSize === size ? 'selected' : ''}>${size} / 页</option>`).join('')}</select></div></div>${orderRows ? `<div class="data-table-wrap"><table class="data-table payment-orders"><thead><tr><th>订单号</th><th>金额</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${orderRows}</tbody></table></div>` : empty('receipt', '暂无订单', '创建充值订单后会显示在这里。')}<div class="pagination-bar"><span>共 ${number(orderPage.total)} 条</span><div class="pagination-controls"><button class="icon-button" data-action="orders-prev" aria-label="上一页" ${orderState.page <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button><strong>${number(orderState.page)} / ${number(orderPage.pages || 1)}</strong><button class="icon-button" data-action="orders-next" aria-label="下一页" ${orderState.page >= (orderPage.pages || 1) ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button></div></div></section>
+    <section class="panel"><div class="panel-header payment-orders-header"><div><h2>订单记录</h2><p>支付与退款状态</p></div>${ordersResult.status === 'fulfilled' ? `<div class="order-filter-controls"><select name="order-status" aria-label="订单状态"><option value="">全部状态</option>${['PENDING','COMPLETED','FAILED','REFUNDED'].map((status) => `<option value="${status}" ${orderState.status === status ? 'selected' : ''}>${paymentStatusLabel(status)}</option>`).join('')}</select><select name="order-page-size" aria-label="每页数量">${[20,50,100].map((size) => `<option value="${size}" ${orderState.pageSize === size ? 'selected' : ''}>${size} / 页</option>`).join('')}</select></div>` : ''}</div>${orderBody}</section>
   </div>`
   icons($('#content'))
   updateRechargePreview()
+  if (restoreRechargeFocus) {
+    const amountInput = $('#recharge-amount')
+    amountInput?.focus({ preventScroll: true })
+  }
   cleanupPaymentPolling(true)
   if (orders.some((item) => ['PENDING', 'PAID', 'RECHARGING'].includes(String(item.status).toUpperCase()))) {
     state.payment.billingTimer = setInterval(() => {
@@ -1434,10 +1530,14 @@ function canvasBlob(canvas, quality) {
 async function compressAvatar(file, maxBytes = 20480) {
   if (!file || !String(file.type || '').startsWith('image/')) throw new Error('请选择图片文件')
   if (file.type === 'image/gif') {
-    if (file.size > maxBytes) throw new Error('GIF 头像不能超过 20KB')
-    return readFileAsDataURL(file)
+    const dataURL = await readFileAsDataURL(file)
+    if (new TextEncoder().encode(dataURL).length > maxBytes) throw new Error('GIF 头像不能超过 20KB')
+    return dataURL
   }
-  if (file.size <= maxBytes) return readFileAsDataURL(file)
+  if (file.size <= maxBytes) {
+    const dataURL = await readFileAsDataURL(file)
+    if (new TextEncoder().encode(dataURL).length <= maxBytes) return dataURL
+  }
   const source = await readFileAsDataURL(file)
   const image = await imageFromURL(source)
   const scales = [1, .92, .84, .76, .68, .6, .52, .44, .36]
@@ -1449,7 +1549,9 @@ async function compressAvatar(file, maxBytes = 20480) {
     canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height)
     for (const quality of qualities) {
       const blob = await canvasBlob(canvas, quality)
-      if (blob && blob.size <= maxBytes) return readFileAsDataURL(new File([blob], 'avatar.webp', { type: 'image/webp' }))
+      if (!blob || blob.size > maxBytes) continue
+      const dataURL = await readFileAsDataURL(new File([blob], 'avatar.webp', { type: 'image/webp' }))
+      if (new TextEncoder().encode(dataURL).length <= maxBytes) return dataURL
     }
   }
   throw new Error('头像压缩后仍超过 20KB')
@@ -1505,14 +1607,15 @@ function renderGuide() {
   const platform = state.guidePlatform
   const platformName = { windows: 'Windows', macos: 'macOS', linux: 'Linux / WSL' }[platform]
   const home = platform === 'windows' ? '%USERPROFILE%' : '~'
-  const nodeInstall = platform === 'windows' ? 'winget install OpenJS.NodeJS.LTS' : platform === 'macos' ? 'brew install node@20' : 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash\nnvm install --lts'
+  const configPath = (...parts) => platform === 'windows' ? `${home}\\${parts.join('\\')}` : `${home}/${parts.join('/')}`
+  const nodeInstall = platform === 'windows' ? 'winget install OpenJS.NodeJS.LTS' : platform === 'macos' ? 'brew install node@20' : 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash\nexport NVM_DIR="$HOME/.nvm"\n[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"\nnvm install --lts'
   const chapters = [
     { number: '01', title: 'Node.js 环境安装', icon: 'square-terminal', steps: [{ title: `${platformName} 安装 Node.js 20 LTS`, code: nodeInstall }, { title: '重新打开终端', body: '安装完成后关闭并重新打开终端。' }, { title: '验证环境', code: 'node -v\nnpm -v' }], links: [['https://nodejs.org/en/download', 'Node.js 下载']] },
     { number: '02', title: 'API 密钥高级功能', icon: 'key-round', images: [['https://aihub.top/assets/aihub-key-advanced-options-B3zINWYy.png', 'AIHub API Key 高级选项']], steps: [{ title: '创建或编辑密钥', body: '在 API Key 页面打开高级设置。' }, { title: '设置倍率与故障转移', body: '配置最高倍率、候选或排除分组，以及自然回切、积极回主或不自动回切。' }, { title: '保存服务端策略', body: '转移依据真实使用样本、供应商大厅探测和主动探测，由 AIHub 服务端执行切换。' }], route: ['keys', '管理 API Key'] },
     { number: '03', title: 'CCS 一键导入', icon: 'import', images: [['https://aihub.top/assets/aihub-key-import-ccs-C1yNkU71.png', 'AIHub 导入 CC Switch'], ['https://aihub.top/assets/cc-switch-import-confirmation-95IsQJIy.png', 'CC Switch 导入确认']], steps: [{ title: '安装 CC Switch', body: '下载并安装当前平台版本。' }, { title: '从 AIHub 发起导入', body: '在密钥操作中选择客户端配置。' }, { title: '核对配置', body: '确认密钥掩码、端点、模型和应用类型，不要分享包含 Key 的深链接。' }, { title: '启用供应商', body: '确认后在 CC Switch 中启用导入项。' }], links: [['https://github.com/farion1231/cc-switch/releases/latest', '下载 CC Switch']] },
-    { number: '04', title: 'Claude Code 配置教程', icon: 'bot', steps: [{ title: '安装 Claude Code', code: 'npm install -g @anthropic-ai/claude-code' }, { title: `写入 ${home}\\.claude\\settings.json`, code: '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://api.aihub.top",\n    "ANTHROPIC_AUTH_TOKEN": "<AIHUB_API_KEY>"\n  }\n}' }, { title: '启动', code: 'claude' }], links: [['https://docs.anthropic.com/en/docs/claude-code/getting-started', 'Claude Code 文档']] },
-    { number: '05', title: 'Codex 配置教程', icon: 'code-2', steps: [{ title: '安装 Codex CLI', code: 'npm install -g @openai/codex@latest' }, { title: `写入 ${home}\\.codex\\config.toml`, code: 'model_provider = "aihub"\n[model_providers.aihub]\nbase_url = "https://aihub.top/v1"\nwire_api = "responses"\nrequires_openai_auth = true' }, { title: `写入 ${home}\\.codex\\auth.json`, code: '{\n  "OPENAI_API_KEY": "<AIHUB_API_KEY>"\n}' }], links: [['https://learn.chatgpt.com/docs/config-file/config-basic', 'Codex 配置文档']] },
-    { number: '06', title: 'Gemini CLI 配置教程', icon: 'sparkles', steps: [{ title: '安装 Gemini CLI', code: 'npm install -g @google/gemini-cli' }, { title: `写入 ${home}\\.gemini\\.env`, code: 'GEMINI_API_KEY=<AIHUB_API_KEY>\nGOOGLE_GEMINI_BASE_URL=https://api.aihub.top\nGEMINI_MODEL=gpt-5.6-sol' }, { title: '启动并选择 API Key', code: 'gemini' }], links: [['https://github.com/google-gemini/gemini-cli', 'Gemini CLI']] },
+    { number: '04', title: 'Claude Code 配置教程', icon: 'bot', steps: [{ title: '安装 Claude Code', code: 'npm install -g @anthropic-ai/claude-code' }, { title: `写入 ${configPath('.claude', 'settings.json')}`, code: '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://api.aihub.top",\n    "ANTHROPIC_AUTH_TOKEN": "<AIHUB_API_KEY>"\n  }\n}' }, { title: '启动', code: 'claude' }], links: [['https://docs.anthropic.com/en/docs/claude-code/getting-started', 'Claude Code 文档']] },
+    { number: '05', title: 'Codex 配置教程', icon: 'code-2', steps: [{ title: '安装 Codex CLI', code: 'npm install -g @openai/codex@latest' }, { title: `写入 ${configPath('.codex', 'config.toml')}`, code: 'model_provider = "OpenAI"\n[model_providers.OpenAI]\nbase_url = "https://aihub.top/v1"\nwire_api = "responses"\nrequires_openai_auth = false' }, { title: `写入 ${configPath('.codex', 'auth.json')}`, code: '{\n  "OPENAI_API_KEY": "<AIHUB_API_KEY>"\n}' }], links: [['https://developers.openai.com/codex/config-reference/', 'Codex 配置文档']] },
+    { number: '06', title: 'Gemini CLI 配置教程', icon: 'sparkles', steps: [{ title: '安装 Gemini CLI', code: 'npm install -g @google/gemini-cli' }, { title: `写入 ${configPath('.gemini', '.env')}`, code: 'GEMINI_API_KEY=<AIHUB_API_KEY>\nGOOGLE_GEMINI_BASE_URL=https://api.aihub.top\nGEMINI_MODEL=gpt-5.6-sol' }, { title: '启动并选择 API Key', code: 'gemini' }], links: [['https://github.com/google-gemini/gemini-cli', 'Gemini CLI']] },
     { number: '07', title: 'AIHubRouter 自动路由工具', icon: 'route', steps: [{ title: `下载 ${platformName} 版本`, body: 'Windows、Linux、macOS x64 与 ARM64 均有对应版本。' }, { title: '预览并执行一次', code: 'aihub-router route --once --dry-run --json\naihub-router route --once --json' }, { title: '每 60 秒监测', code: 'aihub-router watch --interval 60 --json' }], body: 'Economy、Balanced、Speed 三种权重只调整 Key 分组，不代理模型请求，也不修改本地 CLI 配置。', links: [['https://github.com/OnRightPath/AIHubRouter/releases/latest', '下载 AIHubRouter']] },
   ]
   const codeBlock = (value) => `<div class="guide-code"><pre><code>${escapeHTML(value)}</code></pre><button class="icon-button" data-action="copy-guide-code" title="复制" aria-label="复制"><i data-lucide="copy"></i></button></div>`
@@ -1731,15 +1834,21 @@ async function submitCreateKey(target) {
   if (!form.reportValidity()) return
   const data = new FormData(form)
   const groupId = Number(data.get('group_id')) || null
+  const useCustomKey = data.get('use_custom_key') === 'on'
   const { expires_at, ...advanced } = advancedKeyPayload(form, groupId)
-  const body = { name: String(data.get('name') || '').trim(), max_rate_multiplier: keyNumber(data.get('max_rate_multiplier')), ...advanced }
+  const body = { name: String(data.get('name') || '').trim(), use_custom_key: useCustomKey, max_rate_multiplier: keyNumber(data.get('max_rate_multiplier')), ...advanced }
   if (groupId) body.group_id = groupId
   if (keyNumber(data.get('quota')) > 0) body.quota = keyNumber(data.get('quota'))
   if (keyNumber(data.get('expires_in_days')) > 0) body.expires_in_days = keyNumber(data.get('expires_in_days'))
-  if (data.get('use_custom_key') === 'on') body.custom_key = String(data.get('custom_key') || '').trim()
+  if (useCustomKey) body.custom_key = String(data.get('custom_key') || '').trim()
   setBusy(target, true, '创建中')
-  const key = await request('/keys', { method: 'POST', body })
-  openModal('API Key 已创建', `<div class="secret-output"><span class="muted">请妥善保存</span><code id="created-key">${escapeHTML(key.key)}</code><button class="secondary-button" data-action="copy-created-key"><i data-lucide="copy"></i>复制 Key</button></div>`, '<button class="primary-button" data-action="finish-create-key">完成</button>')
+  try {
+    const key = await request('/keys', { method: 'POST', body })
+    invalidateKeyCaches()
+    openModal('API Key 已创建', `<div class="secret-output"><span class="muted">请妥善保存</span><code id="created-key">${escapeHTML(key.key)}</code><button class="secondary-button" data-action="copy-created-key"><i data-lucide="copy"></i>复制 Key</button></div>`, '<button class="primary-button" data-action="finish-create-key">完成</button>')
+  } finally {
+    setBusy(target, false)
+  }
 }
 
 async function submitUpdateKey(target) {
@@ -1749,16 +1858,20 @@ async function submitUpdateKey(target) {
   const groupId = Number(data.get('group_id')) || null
   const body = { name: String(data.get('name') || '').trim(), group_id: groupId, quota: keyNumber(data.get('quota')), max_rate_multiplier: keyNumber(data.get('max_rate_multiplier')), ...advancedKeyPayload(form, groupId) }
   setBusy(target, true, '保存中')
-  await request(`/keys/${state.editingKeyId}`, { method: 'PUT', body })
-  closeModal()
-  toast('API Key 策略已更新')
-  await navigate('keys')
+  try {
+    await request(`/keys/${state.editingKeyId}`, { method: 'PUT', body })
+    invalidateKeyCaches()
+    closeModal()
+    toast('API Key 策略已更新')
+    await navigate('keys')
+  } finally {
+    setBusy(target, false)
+  }
 }
 
 async function useProviderGroupModal(groupId, name, rateMultiplier) {
   state.providerTargetGroup = { id: Number(groupId), name, rateMultiplier: Number(rateMultiplier || 0) }
-  const keysData = await request('/keys?page=1&page_size=100&status=active&sort_by=last_used_at&sort_order=desc')
-  const keys = paginated(keysData).items
+  const keys = await loadAllKeys(100, { status: 'active', sort_by: 'last_used_at', sort_order: 'desc' })
   const keyOptions = keys.map((key) => `<option value="${escapeHTML(key.id)}" ${Number(key.group_id) === Number(groupId) ? 'disabled' : ''}>${escapeHTML(key.name || `Key #${key.id}`)} · ${escapeHTML(key.group?.name || '未分组')}${Number(key.group_id) === Number(groupId) ? '（当前分组）' : ''}</option>`).join('')
   openModal(`使用分组：${name}`, `<div class="provider-group-target"><div><strong>${escapeHTML(name)}</strong><span>倍率 ${number(rateMultiplier, 2)}x</span></div><button class="secondary-button" data-action="create-provider-key"><i data-lucide="plus"></i>新建 API Key</button></div><form id="provider-key-switch-form"><label><span>切换已有密钥</span><select name="key_id"><option value="">${keyOptions ? '请选择 API Key' : '暂无可切换的 API Key'}</option>${keyOptions}</select></label><p class="muted">只修改所选密钥的主分组，密钥内容和其他策略保持不变。</p></form>`, `<button class="secondary-button" data-action="close-modal">取消</button><button class="primary-button" data-action="switch-provider-key" ${keyOptions ? '' : 'disabled'}><i data-lucide="shuffle"></i>切换到此分组</button>`)
 }
@@ -1768,7 +1881,7 @@ function createClientProfileModal() {
   if (!client) return
   const targets = (client.targets || []).map((target) => typeof target === 'string' ? { id: target, label: target } : target)
   const editors = targets.map((target) => `<label class="span-two config-editor"><span>${escapeHTML(target.label || target.id)} <small>${escapeHTML(String(target.format || '').toUpperCase())}</small></span><textarea data-config-target="${escapeHTML(target.id)}" spellcheck="false" placeholder="${escapeHTML(target.placeholder || '粘贴或填写完整配置内容')}"></textarea></label>`).join('')
-  const keyOptions = state.keys.filter((key) => key.status === 'active' && key.key).map((key) => `<option value="${escapeHTML(key.id)}">${escapeHTML(key.name || `Key #${key.id}`)} · ${escapeHTML(key.group?.name || '默认分组')}</option>`).join('')
+  const keyOptions = state.clientKeys.filter((key) => key.status === 'active' && key.key).map((key) => `<option value="${escapeHTML(key.id)}">${escapeHTML(key.name || `Key #${key.id}`)} · ${escapeHTML(key.group?.name || '默认分组')}</option>`).join('')
   const isCodex = state.clientId.startsWith('codex')
   const providerField = isCodex ? '<label class="template-field"><span>模型供应商标识</span><input id="client-template-provider" value="OpenAI" placeholder="例如 OpenAI" /></label>' : ''
   const modelField = isCodex ? '<label class="template-field"><span>默认模型名称</span><input id="client-template-model" value="gpt-5.6-sol" placeholder="例如 gpt-5.6-sol" /></label>' : ''
@@ -1931,6 +2044,7 @@ async function handleContentClick(event) {
     state.pendingPaymentOrderId = target.dataset.id
     return confirmModal('取消充值订单', '确定取消这笔尚未支付的订单？已经支付的订单不会被取消。', 'confirm-cancel-payment-order')
   }
+  if (action === 'retry-orders') return renderBilling()
   if (action === 'usage-detail') return openLogDetail(target.dataset.id)
   if (action === 'orders-prev') { state.orders.page = Math.max(1, state.orders.page - 1); return renderBilling() }
   if (action === 'orders-next') { state.orders.page += 1; return renderBilling() }
@@ -1971,7 +2085,10 @@ async function handleContentClick(event) {
     return renderProviders()
   }
   if (action === 'new-client-profile') {
+    const requestedRoute = state.route
+    const requestedClientId = state.clientId
     await ensureClientKeys()
+    if (state.route !== 'clients' || state.route !== requestedRoute || state.clientId !== requestedClientId) return
     return createClientProfileModal()
   }
   if (action === 'view-client-profile') {
@@ -2039,13 +2156,14 @@ async function handleContentClick(event) {
     return createKeyModal(key)
   }
   if (action === 'copy-key') {
-    const key = state.keys.find((item) => String(item.id) === target.dataset.id)
+    const key = state.keyItems.find((item) => String(item.id) === target.dataset.id)
     if (key?.key) { await window.aihub.copyText(key.key); toast('API Key 已复制') }
   }
   if (action === 'toggle-key') {
-    const key = state.keys.find((item) => String(item.id) === target.dataset.id)
+    const key = state.keyItems.find((item) => String(item.id) === target.dataset.id)
     if (!key) return
     await request(`/keys/${key.id}`, { method: 'PUT', body: { status: key.status === 'active' ? 'inactive' : 'active' } })
+    invalidateKeyCaches()
     toast(key.status === 'active' ? 'API Key 已停用' : 'API Key 已启用')
     navigate('keys')
   }
@@ -2057,36 +2175,74 @@ async function handleContentClick(event) {
   if (action === 'copy-affiliate-code') { await window.aihub.copyText($('#affiliate-code').value); toast('邀请码已复制') }
   if (action === 'copy-affiliate-link') { await window.aihub.copyText($('#affiliate-link').value); toast('邀请链接已复制') }
   if (action === 'remove-avatar') {
-    const profile = await request('/user', { method: 'PUT', body: { avatar_url: '' } })
-    applyProfile(profile)
-    return renderAccount()
+    setBusy(target, true, '移除中')
+    try {
+      const profile = await request('/user', { method: 'PUT', body: { avatar_url: '' } })
+      applyProfile(profile)
+      return await renderAccount()
+    } finally {
+      setBusy(target, false)
+    }
   }
   if (action === 'send-primary-email-code') {
-    const email = String(new FormData($('#primary-email-form')).get('email') || '').trim()
-    if (!email) throw new Error('请输入邮箱')
-    await request('/user/account-bindings/email/send-code', { method: 'POST', body: { email } })
-    toast('验证码已发送')
-    return
+    const input = $('#primary-email-form [name="email"]')
+    if (!input?.checkValidity()) {
+      input?.reportValidity()
+      throw new Error('请输入有效邮箱')
+    }
+    const email = input.value.trim()
+    setBusy(target, true, '发送中')
+    try {
+      await request('/user/account-bindings/email/send-code', { method: 'POST', body: { email } })
+      toast('验证码已发送')
+      return
+    } finally {
+      setBusy(target, false)
+    }
   }
   if (action === 'toggle-balance-notify') {
-    const profile = await request('/user', { method: 'PUT', body: { balance_notify_enabled: !Boolean(state.user?.balance_notify_enabled) } })
-    applyProfile(profile)
-    return renderAccount()
+    setBusy(target, true)
+    try {
+      const profile = await request('/user', { method: 'PUT', body: { balance_notify_enabled: !Boolean(state.user?.balance_notify_enabled) } })
+      applyProfile(profile)
+      return await renderAccount()
+    } finally {
+      setBusy(target, false)
+    }
   }
   if (action === 'send-extra-email-code') {
-    const email = String(new FormData($('#extra-email-form')).get('email') || '').trim()
-    if (!email) throw new Error('请输入通知邮箱')
-    await request('/user/notify-email/send-code', { method: 'POST', body: { email } })
-    toast('验证码已发送')
-    return
+    const input = $('#extra-email-form [name="email"]')
+    if (!input?.checkValidity()) {
+      input?.reportValidity()
+      throw new Error('请输入有效通知邮箱')
+    }
+    const email = input.value.trim()
+    setBusy(target, true, '发送中')
+    try {
+      await request('/user/notify-email/send-code', { method: 'POST', body: { email } })
+      toast('验证码已发送')
+      return
+    } finally {
+      setBusy(target, false)
+    }
   }
   if (action === 'toggle-extra-email') {
-    await request('/user/notify-email/toggle', { method: 'PUT', body: { email: target.dataset.email, disabled: target.dataset.disabled === 'true' } })
-    return renderAccount()
+    setBusy(target, true)
+    try {
+      await request('/user/notify-email/toggle', { method: 'PUT', body: { email: target.dataset.email, disabled: target.dataset.disabled === 'true' } })
+      return await renderAccount()
+    } finally {
+      setBusy(target, false)
+    }
   }
   if (action === 'delete-extra-email') {
-    await request('/user/notify-email', { method: 'DELETE', body: { email: target.dataset.email } })
-    return renderAccount()
+    setBusy(target, true, '删除中')
+    try {
+      await request('/user/notify-email', { method: 'DELETE', body: { email: target.dataset.email } })
+      return await renderAccount()
+    } finally {
+      setBusy(target, false)
+    }
   }
   if (action === 'transfer-affiliate') {
     confirmModal('转入账户余额', '将当前可用返利全部转入账户余额？', 'confirm-transfer-affiliate')
@@ -2143,12 +2299,13 @@ async function handleModalClick(event) {
       if (!keyId) throw new Error('请选择要切换的 API Key')
       setBusy(target, true, '切换中')
       await request(`/keys/${keyId}/group`, { method: 'PUT', body: { group_id: state.providerTargetGroup.id } })
+      invalidateKeyCaches()
       closeModal()
       toast(`API Key 已切换到“${state.providerTargetGroup.name}”`)
       return
     }
     if (action === 'fill-aihub-template') {
-      const key = state.keys.find((item) => String(item.id) === $('#client-template-key')?.value)
+      const key = state.clientKeys.find((item) => String(item.id) === $('#client-template-key')?.value)
       const isCodex = state.clientId.startsWith('codex')
       const model = $('#client-template-model')?.value.trim() || 'gpt-5.6-sol'
       if (!key?.key) throw new Error('请选择可用的 API Key')
@@ -2195,6 +2352,7 @@ async function handleModalClick(event) {
     if (action === 'confirm-delete-key') {
       setBusy(target, true, '删除中')
       await request(`/keys/${state.pendingKeyId}`, { method: 'DELETE' })
+      invalidateKeyCaches()
       closeModal(); toast('API Key 已删除'); navigate('keys')
     }
     if (action === 'submit-client-profile') {
@@ -2423,13 +2581,20 @@ $('#sidebar-nav').addEventListener('click', (event) => {
   const button = event.target.closest('[data-route]')
   if (button) navigate(button.dataset.route)
 })
-$('#content').addEventListener('click', handleContentClick)
+$('#content').addEventListener('click', (event) => {
+  handleContentClick(event).catch((error) => toast(error?.message || '操作失败', 'error'))
+})
 $('#content').addEventListener('submit', handleContentSubmit)
 $('#content').addEventListener('change', handleContentChange)
 $('#content').addEventListener('input', (event) => {
   if (event.target.id === 'recharge-amount') updateRechargePreview()
 })
-$('#modal-root').addEventListener('click', handleModalClick)
+$('#modal-root').addEventListener('click', (event) => {
+  handleModalClick(event).catch((error) => {
+    toast(error?.message || '操作失败', 'error')
+    setBusy(event.target.closest('[data-action]'), false)
+  })
+})
 $('#modal-root').addEventListener('submit', handleContentSubmit)
 $('#modal-root').addEventListener('change', (event) => {
   if (event.target.closest('#create-key-form')) syncKeyPolicyForm()
