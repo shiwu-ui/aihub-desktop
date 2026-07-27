@@ -15,6 +15,16 @@ const state = {
   clientSelectedKeyId: null,
   groups: [],
   usagePeriod: 'month',
+  usageAnalytics: {
+    page: 1,
+    pageSize: 30,
+    startDate: '',
+    endDate: '',
+    granularity: 'day',
+    filters: { api_key_id: '', model: '', group_id: '', request_type: '', billing_type: '', billing_mode: '' },
+  },
+  usageItems: [],
+  usageRegions: Object.create(null),
   dashboardChart: null,
   logs: { page: 1, pageSize: 20, mode: 'usage', filters: {} },
   invoices: { eligiblePage: 1, applicationsPage: 1, pageSize: 20, eligibleOrders: [] },
@@ -503,27 +513,93 @@ async function renderKeys() {
   icons($('#content'))
 }
 
+function usageFilterParams(usageState = state.usageAnalytics) {
+  return {
+    start_date: usageState.startDate,
+    end_date: usageState.endDate,
+    ...usageState.filters,
+  }
+}
+
+function usageOverviewQuery(usageState = state.usageAnalytics) {
+  return queryString({ ...usageFilterParams(usageState), granularity: usageState.granularity })
+}
+
+function usageDetailQuery(usageState = state.usageAnalytics, page = usageState.page, pageSize = usageState.pageSize) {
+  return queryString({ page, page_size: pageSize, ...usageFilterParams(usageState), sort_by: 'created_at', sort_order: 'desc' })
+}
+
+function usageDistribution(title, items, labelField) {
+  if (!items?.length) return `<section class="panel usage-distribution"><div class="panel-header"><h2>${escapeHTML(title)}</h2></div>${empty('chart-no-axes-column', '暂无数据', '所选范围内没有可展示的数据。')}</section>`
+  const rows = items.slice(0, 8).map((item) => `<div class="usage-distribution-row"><strong>${escapeHTML(item[labelField] || item.name || '-')}</strong><span>${number(item.total_tokens ?? item.tokens)} Token</span><span>${number(item.total_requests ?? item.requests)} 次</span><span>${money(item.total_actual_cost ?? item.actual_cost)}</span></div>`).join('')
+  return `<section class="panel usage-distribution"><div class="panel-header"><h2>${escapeHTML(title)}</h2></div><div class="panel-body">${rows}</div></section>`
+}
+
+function usageSectionError(title, message) {
+  return `<section class="panel usage-distribution"><div class="panel-header"><h2>${escapeHTML(title)}</h2></div><div class="panel-body usage-section-error"><i data-lucide="circle-alert"></i><span>${escapeHTML(message || '暂不可用')}</span></div></section>`
+}
+
+function usageRegionText(ip) {
+  const region = state.usageRegions[String(ip || '')]
+  if (!ip) return '-'
+  if (region?.status === 'private') return '内网地址'
+  if (region?.status === 'error') return '查询失败'
+  if (region?.status === 'success') return [region.country_code, region.region, region.city].filter(Boolean).join(' · ')
+  return '未查询'
+}
+
 async function renderUsage() {
-  const period = state.usagePeriod
+  const analytics = state.usageAnalytics
+  const overviewQuery = usageOverviewQuery(analytics)
+  const referenceLoads = []
+  if (!state.keys.length) referenceLoads.push(request('/keys?page=1&page_size=100').then((data) => { state.keys = paginated(data).items }))
+  if (!state.groups.length) referenceLoads.push(request('/groups/available').then((data) => { state.groups = Array.isArray(data) ? data : data?.items || data?.groups || [] }))
+  if (referenceLoads.length) await Promise.allSettled(referenceLoads)
   const [stats, logs] = await Promise.all([
-    request(`/usage/stats?period=${encodeURIComponent(period)}`),
-    request('/usage?page=1&page_size=30&sort_by=created_at&sort_order=desc'),
+    request(`/usage/stats?${overviewQuery}`),
+    request(`/usage?${usageDetailQuery(analytics)}`),
   ])
-  const items = paginated(logs).items
+  const [snapshotResult, modelsResult] = await Promise.allSettled([
+    request(`/usage/dashboard/snapshot-v2?${queryString({ ...usageFilterParams(analytics), granularity: analytics.granularity, include_trend: true, include_model_stats: false, include_group_stats: true })}`),
+    request(`/usage/dashboard/models?${queryString({ ...usageFilterParams(analytics), model_source: 'requested' })}`),
+  ])
+  const page = paginated(logs)
+  const items = page.items
+  state.usageItems = items
   const cacheReadTokens = Number(stats.cache_read_tokens ?? stats.total_cache_read_tokens ?? 0)
   const cacheCreationTokens = Number(stats.cache_creation_tokens ?? stats.total_cache_creation_tokens ?? 0)
-  const rows = items.map((item) => `<tr>
+  const rows = items.map((item) => `<tr data-action="usage-detail" data-id="${escapeHTML(item.id)}" class="usage-detail-row">
     <td style="width:18%"><div class="cell-title"><strong>${escapeHTML(item.model || '未知模型')}</strong><span>${escapeHTML(item.request_id || '')}</span></div></td>
     <td style="width:13%">${escapeHTML(item.api_key?.name || `Key #${item.api_key_id}`)}</td>
     <td style="width:12%"><div class="cell-title"><strong>${number(Number(item.input_tokens || 0) + Number(item.output_tokens || 0))}</strong><span>入 ${number(item.input_tokens)} · 出 ${number(item.output_tokens)}</span></div></td>
     <td style="width:14%"><div class="cell-title"><strong>${number(Number(item.cache_read_tokens || 0) + Number(item.cache_creation_tokens || 0))}</strong><span>读 ${number(item.cache_read_tokens)} · 写 ${number(item.cache_creation_tokens)}</span></div></td>
     <td style="width:11%">${money(item.actual_cost)}</td>
     <td style="width:11%">${item.duration_ms == null ? '-' : `${number(item.duration_ms)} ms`}</td>
-    <td style="width:9%">${item.stream ? '流式' : '非流式'}</td>
+    <td style="width:9%">${escapeHTML(item.inbound_endpoint || item.request_type || (item.stream ? '流式' : '非流式'))}</td>
+    <td><div class="cell-title"><strong>${escapeHTML(item.client_ip || '-')}</strong><span class="usage-region-value" data-ip="${escapeHTML(item.client_ip || '')}">${escapeHTML(usageRegionText(item.client_ip))}</span></div></td>
     <td style="width:12%">${escapeHTML(dateTime(item.created_at))}</td>
   </tr>`).join('')
+  const modelSection = modelsResult.status === 'fulfilled'
+    ? usageDistribution('模型分布', modelsResult.value?.models || modelsResult.value?.items || [], 'model')
+    : usageSectionError('模型分布', modelsResult.reason?.message)
+  const snapshot = snapshotResult.status === 'fulfilled' ? snapshotResult.value : null
+  const groupSection = snapshot ? usageDistribution('分组使用分布', snapshot.groups || [], 'name') : usageSectionError('分组使用分布', snapshotResult.reason?.message)
+  const endpointSection = usageDistribution('端点分布', stats.endpoints || [], 'inbound_endpoint')
+  const trendRows = (snapshot?.trend || []).map((item) => `<div class="usage-trend-row"><strong>${escapeHTML(item.date || item.time || '-')}</strong><span>输入 ${number(item.input_tokens)}</span><span>输出 ${number(item.output_tokens)}</span><span>${money(item.actual_cost)}</span></div>`).join('')
+  const trendSection = snapshot ? `<section class="panel usage-trend"><div class="panel-header"><div><h2>Token 使用趋势</h2><p>按${analytics.granularity === 'hour' ? '小时' : '天'}聚合</p></div></div><div class="panel-body">${trendRows || '<span class="muted">暂无趋势数据</span>'}</div></section>` : usageSectionError('Token 使用趋势', snapshotResult.reason?.message)
+  const usagePagination = `<div class="pagination-bar"><span>共 ${number(page.total)} 条 · 每页 ${number(analytics.pageSize)} 条</span><div class="pagination-controls"><button class="icon-button" data-action="usage-prev" aria-label="上一页" ${analytics.page <= 1 ? 'disabled' : ''}><i data-lucide="chevron-left"></i></button><strong>${number(analytics.page)} / ${number(page.pages || 1)}</strong><button class="icon-button" data-action="usage-next" aria-label="下一页" ${analytics.page >= (page.pages || 1) ? 'disabled' : ''}><i data-lucide="chevron-right"></i></button></div></div>`
+  const keyOptions = state.keys.map((key) => `<option value="${escapeHTML(key.id)}" ${String(analytics.filters.api_key_id) === String(key.id) ? 'selected' : ''}>${escapeHTML(key.name)}</option>`).join('')
+  const groupOptions = state.groups.map((group) => `<option value="${escapeHTML(group.id)}" ${String(analytics.filters.group_id) === String(group.id) ? 'selected' : ''}>${escapeHTML(group.name)}</option>`).join('')
   $('#content').innerHTML = `<div class="page-stack">
-    <div class="page-toolbar"><div class="toolbar-copy"><h2>调用与消费</h2><p>仅显示你自己的调用记录。</p></div><div class="segmented" data-period>${[['today','今日'],['week','本周'],['month','本月']].map(([value, label]) => `<button data-period-value="${value}" class="${period === value ? 'active' : ''}">${label}</button>`).join('')}</div></div>
+    <div class="page-toolbar"><div class="toolbar-copy"><h2>调用与消费</h2><p>仅显示你自己的调用记录。</p></div><div class="button-row"><button class="secondary-button" data-action="usage-region-refresh-all"><i data-lucide="map-pin"></i>刷新地区</button><button class="secondary-button" data-action="export-usage"><i data-lucide="download"></i>导出 CSV</button></div></div>
+    <section class="panel"><form id="usage-analytics-filter" class="filter-panel usage-analytics-filter">
+      <label><span>开始日期</span><input name="start_date" type="date" value="${escapeHTML(analytics.startDate)}" /></label><label><span>结束日期</span><input name="end_date" type="date" value="${escapeHTML(analytics.endDate)}" /></label>
+      <label><span>粒度</span><select name="granularity"><option value="day" ${analytics.granularity === 'day' ? 'selected' : ''}>天</option><option value="hour" ${analytics.granularity === 'hour' ? 'selected' : ''}>小时</option></select></label>
+      <label><span>API Key</span><select name="api_key_id"><option value="">全部</option>${keyOptions}</select></label><label><span>模型</span><input name="model" value="${escapeHTML(analytics.filters.model)}" /></label>
+      <label><span>分组</span><select name="group_id"><option value="">全部</option>${groupOptions}</select></label><label><span>请求类型</span><select name="request_type"><option value="">全部</option><option value="responses" ${analytics.filters.request_type === 'responses' ? 'selected' : ''}>responses</option><option value="chat" ${analytics.filters.request_type === 'chat' ? 'selected' : ''}>chat</option></select></label>
+      <label><span>计费类型</span><select name="billing_type"><option value="">全部</option><option value="payg" ${analytics.filters.billing_type === 'payg' ? 'selected' : ''}>payg</option></select></label><label><span>计费模式</span><select name="billing_mode"><option value="">全部</option><option value="actual" ${analytics.filters.billing_mode === 'actual' ? 'selected' : ''}>actual</option></select></label>
+      <div class="button-row usage-filter-actions"><button type="submit" class="primary-button"><i data-lucide="list-filter"></i>应用筛选</button></div>
+    </form></section>
     <div class="metrics-grid usage-metrics">
       ${metric('实际消费', money(stats.actual_cost ?? stats.total_actual_cost), '所选周期', 'circle-dollar-sign')}
       ${metric('请求数', number(stats.requests ?? stats.total_requests), '全部模型', 'send', 'green')}
@@ -531,7 +607,9 @@ async function renderUsage() {
       ${metric('输出 Token', number(stats.output_tokens ?? stats.total_output_tokens), '模型生成', 'arrow-up-from-line', 'dark')}
       ${metric('缓存 Token', number(cacheReadTokens + cacheCreationTokens), `读取 ${number(cacheReadTokens)} · 写入 ${number(cacheCreationTokens)}`, 'database-zap', 'green')}
     </div>
-    <section class="panel"><div class="panel-header"><div><h2>最近调用</h2><p>${number(paginated(logs).total)} 条记录</p></div></div>${rows ? `<div class="data-table-wrap"><table class="data-table"><thead><tr><th>模型</th><th>API Key</th><th>输入 / 输出</th><th>缓存读 / 写</th><th>消费</th><th>耗时</th><th>模式</th><th>时间</th></tr></thead><tbody>${rows}</tbody></table></div>` : empty('activity', '暂无调用记录', '使用 API Key 发起请求后会显示在这里。')}</section>
+    <section class="usage-distribution-grid">${modelSection}${groupSection}${endpointSection}</section>
+    ${trendSection}
+    <section class="panel"><div class="panel-header"><div><h2>最近调用</h2><p>${number(page.total)} 条记录 · 标准成本 ${money(stats.standard_cost ?? stats.original_cost)}</p></div></div>${rows ? `<div class="data-table-wrap"><table class="data-table usage-detail-table"><thead><tr><th>模型</th><th>API Key</th><th>输入 / 输出</th><th>缓存读 / 写</th><th>消费</th><th>耗时</th><th>端点</th><th>IP / 地区</th><th>时间</th></tr></thead><tbody>${rows}</tbody></table></div>${usagePagination}` : empty('activity', '暂无调用记录', '使用 API Key 发起请求后会显示在这里。')}</section>
   </div>`
   icons($('#content'))
 }
@@ -592,8 +670,10 @@ function failoverRows(items) {
   }).join('')
 }
 
-function csvCell(value) {
-  return `"${String(value ?? '').replaceAll('"', '""')}"`
+function safeCsvCell(value) {
+  let text = String(value ?? '')
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`
+  return `"${text.replaceAll('"', '""')}"`
 }
 
 function usageCSV(items) {
@@ -601,17 +681,30 @@ function usageCSV(items) {
     ['时间', (item) => item.created_at],
     ['请求 ID', (item) => item.request_id],
     ['模型', (item) => item.model],
+    ['上游模型', (item) => item.upstream_model],
+    ['推理强度', (item) => item.reasoning_effort],
     ['API Key', (item) => item.api_key?.name || item.api_key_id],
     ['分组', (item) => item.group?.name || item.group_id],
+    ['入站端点', (item) => item.inbound_endpoint],
+    ['上游端点', (item) => item.upstream_endpoint],
+    ['请求类型', (item) => item.request_type],
+    ['计费类型', (item) => item.billing_type],
+    ['计费模式', (item) => item.billing_mode],
     ['输入 Token', (item) => item.input_tokens],
     ['输出 Token', (item) => item.output_tokens],
     ['缓存读取 Token', (item) => item.cache_read_tokens],
+    ['缓存写入 Token', (item) => item.cache_creation_tokens],
+    ['倍率', (item) => item.rate_multiplier],
+    ['原始成本', (item) => item.original_cost],
     ['实际消费', (item) => item.actual_cost],
+    ['首 Token ms', (item) => item.first_token_ms],
     ['耗时 ms', (item) => item.duration_ms],
     ['流式', (item) => item.stream ? '是' : '否'],
-    ['请求类型', (item) => item.request_type],
+    ['客户端 IP', (item) => item.client_ip],
+    ['地区', (item) => usageRegionText(item.client_ip)],
+    ['User Agent', (item) => item.user_agent],
   ]
-  return [columns.map(([label]) => csvCell(label)).join(','), ...items.map((item) => columns.map(([, get]) => csvCell(get(item))).join(','))].join('\r\n')
+  return [columns.map(([label]) => safeCsvCell(label)).join(','), ...items.map((item) => columns.map(([, get]) => safeCsvCell(get(item))).join(','))].join('\r\n')
 }
 
 async function loadLogsForExport(filters) {
@@ -620,6 +713,19 @@ async function loadLogsForExport(filters) {
   let pages = 1
   do {
     const result = paginated(await request(`/usage?${queryString({ page, page_size: 100, sort_by: 'created_at', sort_order: 'desc', ...filters })}`))
+    items.push(...result.items)
+    pages = Math.min(Number(result.pages || 1), 50)
+    page += 1
+  } while (page <= pages && items.length < 5000)
+  return items.slice(0, 5000)
+}
+
+async function loadUsageForExport() {
+  const items = []
+  let page = 1
+  let pages = 1
+  do {
+    const result = paginated(await request(`/usage?${usageDetailQuery(state.usageAnalytics, page, 100)}`))
     items.push(...result.items)
     pages = Math.min(Number(result.pages || 1), 50)
     page += 1
@@ -864,17 +970,96 @@ async function renderClients() {
 
 async function openLogDetail(id) {
   const item = await request(`/usage/${id}`)
-  openModal('调用详情', `<div class="detail-list">
-    <div class="detail-row"><span>请求 ID</span><strong>${escapeHTML(item.request_id || `#${item.id}`)}</strong></div>
-    <div class="detail-row"><span>模型</span><strong>${escapeHTML(item.model || '-')}</strong></div>
-    <div class="detail-row"><span>API Key</span><strong>${escapeHTML(item.api_key?.name || item.api_key_id || '-')}</strong></div>
-    <div class="detail-row"><span>分组</span><strong>${escapeHTML(item.group?.name || item.group_id || '-')}</strong></div>
-    <div class="detail-row"><span>输入 / 输出 Token</span><strong>${number(item.input_tokens)} / ${number(item.output_tokens)}</strong></div>
-    <div class="detail-row"><span>缓存读取 / 写入</span><strong>${number(item.cache_read_tokens)} / ${number(item.cache_creation_tokens)}</strong></div>
-    <div class="detail-row"><span>实际消费</span><strong>${money(item.actual_cost)}</strong></div>
-    <div class="detail-row"><span>请求耗时</span><strong>${item.duration_ms == null ? '-' : `${number(item.duration_ms)} ms`}</strong></div>
-    <div class="detail-row"><span>创建时间</span><strong>${escapeHTML(dateTime(item.created_at))}</strong></div>
-  </div>`, '<button class="primary-button" data-action="close-modal">完成</button>')
+  const detailRows = [
+    ['请求 ID', item.request_id || `#${item.id}`],
+    ['请求模型', item.model], ['上游模型', item.upstream_model], ['推理强度', item.reasoning_effort],
+    ['API Key', item.api_key?.name || item.api_key_id], ['分组', item.group?.name || item.group_id],
+    ['入站端点', item.inbound_endpoint], ['上游端点', item.upstream_endpoint],
+    ['请求类型', item.request_type], ['计费类型', item.billing_type], ['计费模式', item.billing_mode],
+    ['输入 Token', number(item.input_tokens)], ['输出 Token', number(item.output_tokens)],
+    ['缓存读取 Token', number(item.cache_read_tokens)], ['缓存写入 Token', number(item.cache_creation_tokens)],
+    ['倍率', item.rate_multiplier == null ? '-' : `${number(item.rate_multiplier, 4)}x`],
+    ['账户倍率', item.account_rate_multiplier == null ? '-' : `${number(item.account_rate_multiplier, 4)}x`],
+    ['原始成本', money(item.original_cost)], ['实际消费', money(item.actual_cost)], ['账户成本', money(item.account_cost)],
+    ['首 Token', item.first_token_ms == null ? '-' : `${number(item.first_token_ms)} ms`],
+    ['请求耗时', item.duration_ms == null ? '-' : `${number(item.duration_ms)} ms`],
+    ['User Agent', item.user_agent], ['创建时间', dateTime(item.created_at)],
+  ].map(([label, value]) => `<div class="detail-row"><span>${escapeHTML(label)}</span><strong>${escapeHTML(value ?? '-')}</strong></div>`).join('')
+  const ip = String(item.client_ip || '')
+  const regionRow = `<div class="detail-row usage-region-row"><span>IP / 地区</span><strong><span>${escapeHTML(ip || '-')}</span><span class="usage-region-value" data-ip="${escapeHTML(ip)}">${escapeHTML(usageRegionText(ip))}</span>${ip ? `<button class="icon-button" data-action="usage-region-refresh" data-ip="${escapeHTML(ip)}" title="刷新地区" aria-label="刷新地区"><i data-lucide="refresh-cw"></i></button>` : ''}</strong></div>`
+  openModal('调用详情', `<div class="detail-list usage-detail-list">${detailRows}${regionRow}</div>`, '<button class="primary-button" data-action="close-modal">完成</button>')
+}
+
+function isPrivateIPAddress(value) {
+  const ip = String(value || '').trim().toLowerCase()
+  if (!ip) return true
+  if (ip === '::1' || ip === 'localhost' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80:')) return true
+  const parts = ip.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false
+  return parts[0] === 10 || parts[0] === 127 || (parts[0] === 169 && parts[1] === 254) || (parts[0] === 192 && parts[1] === 168) || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31)
+}
+
+function updateUsageRegionNodes(ip) {
+  $$('.usage-region-value').filter((node) => node.dataset.ip === String(ip)).forEach((node) => {
+    node.textContent = usageRegionText(ip)
+    const region = state.usageRegions[String(ip)]
+    node.title = region?.status === 'success' ? [region.organization, region.timezone].filter(Boolean).join(' · ') : ''
+  })
+}
+
+function normalizedUsageRegion(data) {
+  if (!data?.country_code) return null
+  return { status: 'success', country_code: data.country_code, region: data.region, city: data.city, organization: data.organization, timezone: data.timezone, accuracy: data.accuracy, latitude: data.latitude, longitude: data.longitude }
+}
+
+async function refreshUsageRegion(ip) {
+  const value = String(ip || '').trim()
+  if (!value) return
+  if (isPrivateIPAddress(value)) {
+    state.usageRegions[value] = { status: 'private' }
+    updateUsageRegionNodes(value)
+    return
+  }
+  try {
+    const response = await fetch(`https://get.geojs.io/v1/ip/geo/${encodeURIComponent(value)}.json`)
+    if (!response.ok) throw new Error(`GeoJS ${response.status}`)
+    const region = normalizedUsageRegion(await response.json())
+    if (!region) throw new Error('GeoJS response missing country')
+    state.usageRegions[value] = region
+  } catch {
+    state.usageRegions[value] = { status: 'error' }
+  }
+  updateUsageRegionNodes(value)
+}
+
+async function refreshUsageRegions(items = state.usageItems) {
+  const ips = [...new Set(items.map((item) => String(item.client_ip || '').trim()).filter(Boolean))]
+  const publicIps = []
+  ips.forEach((ip) => {
+    if (isPrivateIPAddress(ip)) {
+      state.usageRegions[ip] = { status: 'private' }
+      updateUsageRegionNodes(ip)
+    } else if (state.usageRegions[ip]?.status !== 'success') publicIps.push(ip)
+  })
+  for (let index = 0; index < publicIps.length; index += 50) {
+    const batch = publicIps.slice(index, index + 50)
+    try {
+      const response = await fetch(`https://get.geojs.io/v1/ip/geo.json?ip=${batch.map(encodeURIComponent).join(',')}`)
+      if (!response.ok) throw new Error(`GeoJS ${response.status}`)
+      const payload = await response.json()
+      const entries = Array.isArray(payload) ? payload : Object.values(payload || {})
+      batch.forEach((ip) => {
+        const match = entries.find((entry) => String(entry?.ip) === ip)
+        state.usageRegions[ip] = normalizedUsageRegion(match) || { status: 'error' }
+        updateUsageRegionNodes(ip)
+      })
+    } catch {
+      batch.forEach((ip) => {
+        state.usageRegions[ip] = { status: 'error' }
+        updateUsageRegionNodes(ip)
+      })
+    }
+  }
 }
 
 function failoverDetailValue(value) {
@@ -1592,6 +1777,26 @@ async function handleContentClick(event) {
     state.pendingPaymentOrderId = target.dataset.id
     return confirmModal('取消充值订单', '确定取消这笔尚未支付的订单？已经支付的订单不会被取消。', 'confirm-cancel-payment-order')
   }
+  if (action === 'usage-detail') return openLogDetail(target.dataset.id)
+  if (action === 'usage-prev') { state.usageAnalytics.page = Math.max(1, state.usageAnalytics.page - 1); return renderUsage() }
+  if (action === 'usage-next') { state.usageAnalytics.page += 1; return renderUsage() }
+  if (action === 'usage-region-refresh-all') {
+    setBusy(target, true, '查询中')
+    await refreshUsageRegions()
+    setBusy(target, false)
+    return
+  }
+  if (action === 'export-usage') {
+    setBusy(target, true, '导出中')
+    try {
+      const items = await loadUsageForExport()
+      const result = await window.aihub.saveText({ filename: `aihub-usage-${new Date().toISOString().slice(0, 10)}.csv`, content: usageCSV(items) })
+      if (result.ok) toast(`已导出 ${number(items.length)} 条记录`)
+    } finally {
+      setBusy(target, false)
+    }
+    return
+  }
   if (action === 'log-detail') return state.logs.mode === 'failover' ? openFailoverDetail(target.dataset.id) : openLogDetail(target.dataset.id)
   if (action === 'invoice-apply-order') return openInvoiceApplication(target.dataset.id)
   if (action === 'invoice-orders-prev') { state.invoices.eligiblePage = Math.max(1, state.invoices.eligiblePage - 1); return renderInvoices() }
@@ -1718,6 +1923,12 @@ async function handleModalClick(event) {
   const target = event.target.closest('[data-action]')
   if (!target) return
   const action = target.dataset.action
+  if (action === 'usage-region-refresh') {
+    setBusy(target, true, '查询中')
+    await refreshUsageRegion(target.dataset.ip)
+    setBusy(target, false)
+    return
+  }
   if (action === 'move-failover-group-up' || action === 'move-failover-group-down') {
     moveFailoverGroup($('#create-key-form'), Number(target.dataset.groupId), action.endsWith('up') ? -1 : 1)
     return
@@ -1880,6 +2091,26 @@ async function handleContentSubmit(event) {
   const button = form.querySelector('button[type="submit"]')
   try {
     setBusy(button, true)
+    if (form.id === 'usage-analytics-filter') {
+      const data = new FormData(form)
+      state.usageAnalytics = {
+        ...state.usageAnalytics,
+        page: 1,
+        startDate: String(data.get('start_date') || ''),
+        endDate: String(data.get('end_date') || ''),
+        granularity: String(data.get('granularity') || 'day'),
+        filters: {
+          api_key_id: String(data.get('api_key_id') || ''),
+          model: String(data.get('model') || '').trim(),
+          group_id: String(data.get('group_id') || ''),
+          request_type: String(data.get('request_type') || ''),
+          billing_type: String(data.get('billing_type') || ''),
+          billing_mode: String(data.get('billing_mode') || ''),
+        },
+      }
+      await renderUsage()
+      return
+    }
     if (form.id === 'log-filter-form') {
       const values = Object.fromEntries(new FormData(form))
       state.logs.page = 1

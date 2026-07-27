@@ -268,6 +268,20 @@ textarea { min-height: 90px; resize: vertical; }
 .failover-reason { display: grid; gap: 3px; min-width: 0; }
 .failover-reason strong,.failover-reason span { overflow-wrap: anywhere; }
 .failover-reason span { color: var(--muted); font-size: 9px; line-height: 1.35; }
+.usage-analytics-filter { grid-template-columns: repeat(5,minmax(120px,1fr)); }
+.usage-filter-actions { grid-column: 1/-1; justify-content: flex-end; }
+.usage-distribution-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.usage-distribution .panel-body,.usage-trend .panel-body { display: grid; gap: 0; }
+.usage-distribution-row,.usage-trend-row { min-width: 0; min-height: 38px; display: grid; grid-template-columns: minmax(0,1.4fr) repeat(3,minmax(64px,.7fr)); align-items: center; gap: 8px; border-bottom: 1px solid var(--line-soft); font-size: 9px; }
+.usage-distribution-row:last-child,.usage-trend-row:last-child { border-bottom: 0; }
+.usage-distribution-row strong,.usage-trend-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-distribution-row span,.usage-trend-row span { color: var(--muted); text-align: right; }
+.usage-section-error { min-height: 94px; place-content: center; justify-items: center; color: var(--muted); text-align: center; }
+.usage-section-error svg { width: 20px; height: 20px; color: var(--amber); }
+.usage-detail-row { cursor: pointer; }
+.usage-detail-list .detail-row strong { max-width: 68%; overflow-wrap: anywhere; }
+.usage-region-row strong { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.usage-region-value { color: var(--muted); font-size: 9px; }
 @media (max-width: 1000px) {
   .failover-log-table .data-table,.failover-log-table .data-table thead,.failover-log-table .data-table tbody { display: block; width: 100%; }
   .failover-log-table .data-table thead tr,.failover-log-table .data-table tbody tr { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); width: 100%; }
@@ -482,6 +496,7 @@ textarea { min-height: 90px; resize: vertical; }
   .dashboard-grid,.client-layout { grid-template-columns: 1fr; }
   .plan-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .filter-panel { grid-template-columns: repeat(3,minmax(120px,1fr)); }
+  .usage-distribution-grid { grid-template-columns: 1fr; }
   .template-fields { grid-template-columns: 1fr 1fr; }
   .template-fields button { grid-column: 1/-1; }
   .login-view { padding-left: 38px; padding-right: 38px; }

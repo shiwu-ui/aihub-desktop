@@ -19,6 +19,7 @@
     "test:single-instance": "node tools/single-instance-smoke.cjs",
     "test:announcement-markdown": "node tools/announcement-markdown-smoke.cjs",
     "test:usage-cache": "node tools/usage-cache-smoke.cjs",
+    "test:usage-parity": "node tools/usage-parity-smoke.cjs",
     "test:failover-log": "node tools/failover-log-smoke.cjs",
     "test:dashboard-redeem": "node tools/dashboard-redeem-smoke.cjs",
     "test:sidecar-rpc": "node tools/sidecar-rpc-smoke.cjs",
