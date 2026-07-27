@@ -37,6 +37,7 @@ async function run() {
         { id: 301, out_trade_no: 'DESKTOP-ORDER-301', amount: 300, currency: 'CNY', status: 'COMPLETED', completed_at: '2026-07-27T01:02:03Z', eligible: true, applied: false },
         { id: 302, out_trade_no: 'DESKTOP-ORDER-302', amount: 20, currency: 'CNY', status: 'COMPLETED', completed_at: '2026-07-26T01:02:03Z', eligible: false, applied: false, eligibility_reason: 'amount_below_300' },
         { id: 303, out_trade_no: 'DESKTOP-ORDER-303', amount: 500, currency: 'CNY', status: 'COMPLETED', completed_at: '2026-07-25T01:02:03Z', eligible: true, applied: true },
+        { id: 304, out_trade_no: 'DESKTOP-ORDER-304', amount: 120, currency: 'CNY', status: 'COMPLETED', completed_at: '2026-07-24T01:02:03Z', eligible: false, applied: false, eligibility_reason: 0 },
       ]
       const applications = [{
         id: 901,
@@ -76,8 +77,10 @@ async function run() {
     assert.match(orderText, /DESKTOP-ORDER-301/)
     assert.match(orderText, /DESKTOP-ORDER-302/)
     assert.match(orderText, /DESKTOP-ORDER-303/)
+    assert.match(orderText, /DESKTOP-ORDER-304/)
     assert.match(orderText, /金额不足 300/)
     assert.match(orderText, /已申请/)
+    assert.equal(await orderList.locator('tr', { hasText: 'DESKTOP-ORDER-304' }).locator('.status-badge').textContent(), '0')
     assert.equal(await page.getByRole('button', { name: '申请开票', exact: true }).count(), 1)
     await page.getByRole('button', { name: '申请开票', exact: true }).click()
     const form = page.locator('#invoice-application-form')

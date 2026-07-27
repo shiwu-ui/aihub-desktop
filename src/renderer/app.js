@@ -158,9 +158,9 @@ function canApplyForInvoice(order) {
 function invoiceOrderReason(order) {
   const rawReason = ['eligibility_reason', 'ineligible_reason', 'reason', 'message']
     .map((field) => order?.[field])
-    .find((value) => typeof value === 'string' && value.trim())
-  if (rawReason === 'amount_below_300') return '金额不足 300'
-  return rawReason?.trim() || '暂不符合申请条件'
+    .find((value) => value !== null && value !== undefined && String(value).trim() !== '')
+  if (String(rawReason) === 'amount_below_300') return '金额不足 300'
+  return rawReason === undefined ? '暂不符合申请条件' : String(rawReason).trim()
 }
 
 function invoiceOrderState(order) {
@@ -545,7 +545,9 @@ function queryString(params) {
 }
 
 function failoverLabel(value, labels) {
-  return labels[String(value)] || String(value || '-')
+  if (value === null || value === undefined || value === '') return '-'
+  const raw = String(value)
+  return Object.hasOwn(labels, raw) ? labels[raw] : raw
 }
 
 function failoverProbeLabel(value) {
@@ -555,8 +557,8 @@ function failoverProbeLabel(value) {
 }
 
 function failoverSummary(item) {
-  const strategyLabels = { manual: '自选分组', lowest_rate: '最低倍率优先', fastest: '最快响应优先' }
-  const recoveryLabels = { sticky: '保持当前', prefer_primary: '积极回主', manual_only: '仅手动切换' }
+  const strategyLabels = { manual: '按我选择的分组顺序', lowest_rate: '按最低倍率优先', fastest: '按最快首字优先' }
+  const recoveryLabels = { sticky: '自然回切（推荐）', prefer_primary: '积极回主', manual_only: '不自动回切' }
   const reasonLabels = { upstream_503: '上游返回 503', timeout: '请求超时', unavailable: '分组不可用' }
   const healthLabels = { unavailable: '健康异常' }
   const sourceGroup = item.source_group_name || item.source_group?.name || item.source_group_id || '-'

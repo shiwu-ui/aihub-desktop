@@ -59,6 +59,19 @@ async function run() {
         upstream_status_code: 503,
         created_at: '2026-07-27T01:02:03Z',
       }
+      const unknownFailover = {
+        ...failover,
+        id: 92,
+        api_key_name: 'Unknown Key',
+        source_group_name: 'Future Source',
+        target_group_name: 'Future Target',
+        strategy: 0,
+        recovery_mode: 'future_recovery',
+        reason: 'future_reason',
+        health_class: 0,
+        health_probe: false,
+        upstream_status_code: 0,
+      }
 
       request = async (route) => {
         if (route === '/keys?page=1&page_size=100') return { items: keys, total: 1, pages: 1 }
@@ -69,7 +82,7 @@ async function run() {
             route,
             params: Object.fromEntries(new URLSearchParams(search)),
           })
-          return { items: [failover], total: 1, pages: 1 }
+          return { items: [failover, unknownFailover], total: 2, pages: 1 }
         }
         if (route.startsWith('/usage?')) return { items: [], total: 0, pages: 1 }
         throw new Error(`Unexpected mock route: ${route}`)
@@ -134,6 +147,8 @@ async function run() {
       '健康异常',
     ]
     const missingRowText = expectedRowText.filter((text) => !rowText.includes(text))
+    const unknownRowText = await page.locator('.failover-log-table tbody tr').filter({ hasText: 'Unknown Key' }).textContent()
+    ;['策略：0', '恢复：future_recovery', 'future_reason', '健康：0', '常规转移', '上游：0'].forEach((value) => assert.ok(unknownRowText.includes(value), `unknown failover value must remain raw: ${value}`))
     const overflow = await page.evaluate(() => {
       const content = document.querySelector('#content')
       return {
@@ -155,9 +170,11 @@ async function run() {
     const modal = page.locator('.modal')
     await modal.waitFor()
     const detailText = await modal.textContent()
-    ;['source_group_id', 'target_group_id', 'strategy', 'recovery_mode', 'reason', 'health_class', 'health_probe', 'upstream_status_code'].forEach((field) => assert.match(detailText, new RegExp(field)))
-    assert.match(detailText, /1/)
-    assert.match(detailText, /2/)
+    const expectedDetail = await page.evaluate(() => state.currentLogs.find((item) => item.id === 91))
+    Object.entries(expectedDetail).forEach(([field, value]) => {
+      assert.ok(detailText.includes(field), `detail must include field: ${field}`)
+      assert.ok(detailText.includes(typeof value === 'object' ? JSON.stringify(value) : String(value)), `detail must include raw value for: ${field}`)
+    })
     assert.equal(await page.evaluate(() => window.__failoverCalls.length), requestsBeforeDetail)
     await page.locator('.modal-footer button[data-action="close-modal"]').click()
 
