@@ -35,3 +35,4 @@
 [2026-07-28 08:13] 校验 1.1.0 PE/ASAR、latest.yml、SHA-256 并完成打包态启动烟雾测试 (校验两个 EXE、app.asar；packaged smoke 2/2 通过)
 [2026-07-28 19:22] 配置 GitHub Actions 三平台原生构建与 14 天 Artifacts，并补充跨平台 Electron Builder 目标和契约测试 (main push: Windows x64, Linux x64, macOS x64/arm64)
 [2026-07-28 19:36] 配置 v* 标签触发四平台构建并自动创建 GitHub Release，正文使用 pending.md 并追加产物与未签名提示 (GitHub Actions release job)
+[2026-07-28 19:51] 发布 v1.1.0 四平台安装包并完善 GitHub Wiki 与仓库中文 About 元数据 (Release v1.1.0; Wiki 8 pages; website/topics)
