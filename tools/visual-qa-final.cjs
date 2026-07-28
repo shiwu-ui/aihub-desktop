@@ -41,7 +41,7 @@ async function run() {
         if (route === '/keys/7') return key
         if (route.startsWith('/keys?')) return { items: [key], total: 1, pages: 1 }
         if (route.startsWith('/public/monitor/summary')) return { monitoringActive: true, generatedAt: '2026-07-28T00:00:00Z', apis: [{ id: 'qa', group_id: 2, planType: 'Fallback Group', platform: 'openai', available: true, priceMultiplier: .02, firstTokenLatencyMs: 320, outputTokensPerSecond: 70, inputTokens: 800, outputTokens: 200, cacheHitRate: .8, successRates: { '6h': .99, '24h': .98, '7d': .97, '30d': .96 }, checkedAt: '2026-07-28T00:00:00Z' }] }
-        if (route === '/public/monitor/series/6h') return { seriesByApiId: { qa: [['2026-07-28T00:00:00Z', 1, 320, 70, 800]] } }
+        if (route === '/public/monitor/series/24h') return { seriesByApiId: { qa: [['2026-07-28T00:00:00Z', 1, 320, 70, 800]] } }
         if (route.startsWith('/invoices/eligible-orders?')) return { items: [{ id: 301, out_trade_no: 'QA-ORDER-301', amount: 300, currency: 'CNY', status: 'COMPLETED', completed_at: '2026-07-28T00:00:00Z', eligible: true, applied: false }], total: 1, pages: 1 }
         if (route.startsWith('/invoices/my?')) return { items: [{ id: 901, payment_order_id: 300, company_title: 'QA Company', tax_number: 'QA-TAX', email: 'invoice@example.invalid', status: 'pending', created_at: '2026-07-28T00:00:00Z' }], total: 1, pages: 1 }
         if (route === '/payment/config') return { payment_enabled: true }

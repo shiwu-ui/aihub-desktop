@@ -13,6 +13,11 @@ const labels = {
   preferPrimary: '\u79ef\u6781\u56de\u4e3b',
   upstream503: '\u4e0a\u6e38\u8fd4\u56de 503',
   activeProbe: '\u4e3b\u52a8\u63a2\u6d4b',
+  accountUnavailable: '\u5f53\u524d\u5206\u7ec4\u8d26\u53f7\u4e0d\u53ef\u7528',
+  accountExhausted: '\u5f53\u524d\u5206\u7ec4\u8d26\u53f7\u5df2\u8017\u5c3d',
+  upstream429: '\u4e0a\u6e38\u9650\u6d41\uff08429\uff09',
+  primaryCooldown: '\u4e3b\u5206\u7ec4\u5904\u4e8e\u5065\u5eb7\u51b7\u5374',
+  primaryCooldownNoCandidate: '\u4e3b\u5206\u7ec4\u51b7\u5374\u4e14\u6ca1\u6709\u53ef\u7528\u5907\u7528\u5206\u7ec4',
 }
 
 async function run() {
@@ -72,6 +77,13 @@ async function run() {
         health_probe: false,
         upstream_status_code: 0,
       }
+      const reasonFailovers = [
+        ['account_unavailable', 93],
+        ['account_exhausted', 94],
+        ['upstream_429', 95],
+        ['primary_health_cooldown', 96],
+        ['primary_health_cooldown_no_candidate', 97],
+      ].map(([reason, id]) => ({ ...failover, id, api_key_name: `Reason ${id}`, reason }))
 
       request = async (route) => {
         if (route === '/keys?page=1&page_size=100') return { items: keys, total: 1, pages: 1 }
@@ -82,7 +94,7 @@ async function run() {
             route,
             params: Object.fromEntries(new URLSearchParams(search)),
           })
-          return { items: [failover, unknownFailover], total: 2, pages: 1 }
+          return { items: [failover, unknownFailover, ...reasonFailovers], total: 7, pages: 1 }
         }
         if (route.startsWith('/usage?')) return { items: [], total: 0, pages: 1 }
         throw new Error(`Unexpected mock route: ${route}`)
@@ -97,6 +109,35 @@ async function run() {
     await failoverMode.click()
     await page.waitForFunction(() => window.__failoverCalls.length === 1)
 
+    const initialFailoverCall = await page.evaluate(() => window.__failoverCalls[0])
+    assert.ok(initialFailoverCall.params.start_date, 'failover mode must keep the default start date')
+    assert.ok(initialFailoverCall.params.end_date, 'failover mode must keep the default end date')
+    assert.equal(
+      new Date(`${initialFailoverCall.params.end_date}T00:00:00`).getTime() - new Date(`${initialFailoverCall.params.start_date}T00:00:00`).getTime(),
+      24 * 60 * 60 * 1000,
+      'failover mode must default to the latest 24-hour date range',
+    )
+
+    await page.evaluate(() => {
+      window.__nativeDateForFailoverTest = Date
+      const NativeDate = Date
+      const futureNow = NativeDate.now() + 48 * 60 * 60 * 1000
+      window.Date = class extends NativeDate {
+        constructor(...args) { super(...(args.length ? args : [futureNow])) }
+        static now() { return futureNow }
+      }
+    })
+    await page.locator('[data-action="reset-log-filters"]').click()
+    await page.waitForFunction(() => window.__failoverCalls.length === 2)
+    await page.evaluate(() => { window.Date = window.__nativeDateForFailoverTest })
+    const refreshedFailoverCall = await page.evaluate(() => window.__failoverCalls[1])
+    assert.notEqual(refreshedFailoverCall.params.start_date, initialFailoverCall.params.start_date, 'reset must recalculate the default date range')
+    assert.equal(
+      new Date(`${refreshedFailoverCall.params.end_date}T00:00:00`).getTime() - new Date(`${refreshedFailoverCall.params.start_date}T00:00:00`).getTime(),
+      24 * 60 * 60 * 1000,
+      'recalculated log defaults must remain a 24-hour date range',
+    )
+
     const failoverForm = page.locator('#log-filter-form')
     if (await failoverForm.locator('[name="group_id"], [name="stream"]').count()) {
       throw new Error('Failover filters must not include usage-only fields')
@@ -108,7 +149,7 @@ async function run() {
     await form.locator('[name="model"]').fill('gpt-5.6-sol')
     await form.locator('[name="api_key_id"]').selectOption('7')
     await form.locator('button[type="submit"]').click()
-    await page.waitForFunction(() => window.__failoverCalls.length === 2)
+    await page.waitForFunction(() => window.__failoverCalls.length === 3)
 
     const lastCall = await page.evaluate(() => window.__failoverCalls.at(-1))
     const expectedParams = {
@@ -149,6 +190,9 @@ async function run() {
     const missingRowText = expectedRowText.filter((text) => !rowText.includes(text))
     const unknownRowText = await page.locator('.failover-log-table tbody tr').filter({ hasText: 'Unknown Key' }).textContent()
     ;['策略：0', '恢复：future_recovery', 'future_reason', '健康：0', '常规转移', '上游：0'].forEach((value) => assert.ok(unknownRowText.includes(value), `unknown failover value must remain raw: ${value}`))
+    const failoverTableText = await page.locator('.failover-log-table').textContent()
+    ;[labels.accountUnavailable, labels.accountExhausted, labels.upstream429, labels.primaryCooldown, labels.primaryCooldownNoCandidate]
+      .forEach((value) => assert.ok(failoverTableText.includes(value), `missing Chinese failover reason: ${value}`))
     const overflow = await page.evaluate(() => {
       const content = document.querySelector('#content')
       return {

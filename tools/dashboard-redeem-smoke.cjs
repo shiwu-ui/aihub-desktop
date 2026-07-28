@@ -85,6 +85,17 @@ async function run() {
     await page.evaluate(() => navigate('changelog'))
     await page.waitForSelector('.release-list')
     const releaseCount = await page.locator('.release-item').count()
+    const currentReleaseText = await page.locator('.release-item').first().textContent()
+    const currentReleaseDetails = ['最高倍率', '倍率变更邮件', '按我选择的分组顺序', '按最低倍率优先', '按最快首字优先', '自然回切', '积极回主', '不自动回切', '故障转移日志', '自助发票', '用量分析', '供应商大厅', '充值订单', '八章教程']
+      .every((label) => currentReleaseText.includes(label))
+    const currentReleaseClaimsExistingFeaturesAsNew = ['新增最高倍率', '新增故障转移日志', '新增自助发票']
+      .some((label) => currentReleaseText.includes(label))
+    if (screenshotDir) {
+      await page.screenshot({ path: path.join(screenshotDir, 'changelog-page-1280x820.png') })
+      await page.setViewportSize({ width: 980, height: 680 })
+      await page.screenshot({ path: path.join(screenshotDir, 'changelog-page-980x680.png') })
+      await page.setViewportSize({ width: 1280, height: 820 })
+    }
     await page.evaluate(() => navigate('about'))
     await page.waitForSelector('.about-hero')
     const aboutText = await page.textContent('#content')
@@ -93,7 +104,7 @@ async function run() {
     assert.equal(navLabels.includes('套餐'), false)
     assert.equal(planRoute.normalized, 'billing')
     assert.equal(planRoute.route, 'billing')
-    if (metricCount !== 8 || dashboardText.includes('订阅状态') || !dashboardText.includes('累计 Token') || redeemRows !== 3 || !navLabels.includes('充值') || !navLabels.includes('兑换码') || !navLabels.includes('更新日志') || !navLabels.includes('关于本软件') || releaseCount !== 8 || !aboutText.includes('1.1.0') || overflow.body > 1 || overflow.content > 1 || errors.length) throw new Error(JSON.stringify({ metricCount, dashboardText, redeemRows, navLabels, planRoute, releaseCount, aboutText, overflow, errors }))
+    if (metricCount !== 8 || dashboardText.includes('订阅状态') || !dashboardText.includes('累计 Token') || redeemRows !== 3 || !navLabels.includes('充值') || !navLabels.includes('兑换码') || !navLabels.includes('更新日志') || !navLabels.includes('关于本软件') || releaseCount !== 8 || !currentReleaseDetails || currentReleaseClaimsExistingFeaturesAsNew || !aboutText.includes('1.1.0') || overflow.body > 1 || overflow.content > 1 || errors.length) throw new Error(JSON.stringify({ metricCount, dashboardText, redeemRows, navLabels, planRoute, releaseCount, currentReleaseText, currentReleaseDetails, currentReleaseClaimsExistingFeaturesAsNew, aboutText, overflow, errors }))
     console.log(JSON.stringify({ ok: true, dashboardMetrics: 8, subscriptionRemoved: true, redeemActivity: redeemRows, planRoute, releaseCount, aboutVersion: '1.1.0', overflow }))
   } finally {
     await app.close()

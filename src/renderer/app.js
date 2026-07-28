@@ -6,6 +6,23 @@ const APP_VERSION = '1.1.0'
 const savedTheme = localStorage.getItem(THEME_STORAGE_KEY)
 document.documentElement.classList.toggle('dark', savedTheme ? savedTheme === 'dark' : true)
 
+function localDateValue(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function default24HourRange(now = new Date()) {
+  return {
+    start: localDateValue(new Date(now.getTime() - 24 * 60 * 60 * 1000)),
+    end: localDateValue(now),
+  }
+}
+
+const DEFAULT_24_HOUR_RANGE = default24HourRange()
+const defaultLogFilters = () => {
+  const range = default24HourRange()
+  return { start_date: range.start, end_date: range.end }
+}
+
 const state = {
   route: 'dashboard',
   user: null,
@@ -19,21 +36,21 @@ const state = {
   clientSelectedKeyId: null,
   groups: [],
   guidePlatform: 'windows',
-  usagePeriod: 'month',
+  usagePeriod: '24h',
   usageAnalytics: {
     page: 1,
     pageSize: 30,
-    startDate: '',
-    endDate: '',
-    granularity: 'day',
+    startDate: DEFAULT_24_HOUR_RANGE.start,
+    endDate: DEFAULT_24_HOUR_RANGE.end,
+    granularity: 'hour',
     filters: { api_key_id: '', model: '', group_id: '', request_type: '', billing_type: '', billing_mode: '' },
   },
   usageItems: [],
   usageRegions: Object.create(null),
   dashboardChart: null,
-  logs: { page: 1, pageSize: 20, mode: 'usage', filters: {} },
+  logs: { page: 1, pageSize: 20, mode: 'usage', filters: defaultLogFilters() },
   invoices: { eligiblePage: 1, applicationsPage: 1, pageSize: 20, eligibleOrders: [] },
-  providerWindow: '6h',
+  providerWindow: '24h',
   providerSort: 'availability',
   providerMetric: 'first_token',
   providerSummary: null,
@@ -673,7 +690,16 @@ function failoverProbeLabel(value) {
 function failoverSummary(item) {
   const strategyLabels = { manual: '按我选择的分组顺序', lowest_rate: '按最低倍率优先', fastest: '按最快首字优先' }
   const recoveryLabels = { sticky: '自然回切（推荐）', prefer_primary: '积极回主', manual_only: '不自动回切' }
-  const reasonLabels = { upstream_503: '上游返回 503', timeout: '请求超时', unavailable: '分组不可用' }
+  const reasonLabels = {
+    account_unavailable: '当前分组账号不可用',
+    account_exhausted: '当前分组账号已耗尽',
+    upstream_503: '上游返回 503',
+    upstream_429: '上游限流（429）',
+    primary_health_cooldown: '主分组处于健康冷却',
+    primary_health_cooldown_no_candidate: '主分组冷却且没有可用备用分组',
+    timeout: '请求超时',
+    unavailable: '分组不可用',
+  }
   const healthLabels = { unavailable: '健康异常' }
   const sourceGroup = item.source_group_name || item.source_group?.name || item.source_group_id || '-'
   const targetGroup = item.target_group_name || item.target_group?.name || item.target_group_id || '-'
@@ -1629,7 +1655,19 @@ function renderGuide() {
 
 function renderChangelog() {
   const releases = [
-    { version: '1.1.0', date: '当前版本', title: '充值优先的桌面工作台', items: ['移除套餐订阅入口，在线充值成为唯一购买流程。', '旧版套餐链接会自动转到充值页面，避免历史导航失效。'] },
+    {
+      version: '1.1.0',
+      date: '当前版本',
+      title: '故障转移、用量分析与自助服务更新',
+      items: [
+        '完善 API Key 最高倍率限制和倍率变更邮件通知；故障转移策略统一为按我选择的分组顺序、按最低倍率优先和按最快首字优先。',
+        '回切模式统一为自然回切、积极回主和不自动回切；支持候选或排除分组，并综合真实使用记录、供应商大厅探测和主动探测。',
+        '重做故障转移日志，补齐中文切换原因和完整详情；用量分析补齐模型、分组、端点、缓存 Token、IP 地区和安全 CSV 导出。',
+        '完善自助发票和账户页，覆盖头像、主邮箱、余额提醒、额外通知邮箱和邀请返利明细。',
+        '升级供应商大厅的倍率、最快首字和可用率排序，以及首字、TPS、输入 Token 趋势；充值订单支持筛选、分页、查询与取消。',
+        '更新八章教程，覆盖 Windows、macOS、Linux / WSL；移除套餐订阅入口，旧版套餐链接自动跳转充值页面。',
+      ],
+    },
     { version: '1.0.7', date: '上一版本', title: '密钥策略、故障转移与自助发票', items: ['增加最高倍率、倍率变更通知、三种故障转移策略和三种回切模式。', '调用日志新增故障转移审计，自助发票和八章使用教程同步上线。'] },
     { version: '1.0.6', date: '历史版本', title: '关于页布局优化', items: ['将关于本软件改为紧凑横向信息栏，避免品牌图占满首屏。', '软件信息、安全与隐私、帮助反馈在常用窗口尺寸下更易浏览。'] },
     { version: '1.0.5', date: '历史版本', title: '软件信息中心', items: ['在账户设置下新增“更新日志”和“关于本软件”两个独立页面。', '整理从 v1.0.1 至今的主要功能变化，便于快速了解每次更新。', '关于页面集中展示当前版本、运行平台、安全隐私和帮助信息。'] },
@@ -1956,7 +1994,7 @@ async function handleContentClick(event) {
   if (target.dataset.dashboardRoute) {
     const route = target.dataset.dashboardRoute
     if (route === 'failover') {
-      state.logs = { ...state.logs, mode: 'failover', page: 1, filters: {} }
+      state.logs = { ...state.logs, mode: 'failover', page: 1, filters: defaultLogFilters() }
       return navigate('logs')
     }
     return navigate(route)
@@ -1987,7 +2025,7 @@ async function handleContentClick(event) {
     return renderClients()
   }
   if (target.dataset.logMode) {
-    state.logs = { ...state.logs, mode: target.dataset.logMode, page: 1, filters: {} }
+    state.logs = { ...state.logs, mode: target.dataset.logMode, page: 1, filters: defaultLogFilters() }
     return renderLogs()
   }
   const action = target.dataset.action
@@ -2078,7 +2116,7 @@ async function handleContentClick(event) {
   }
   if (action === 'logs-prev') { state.logs.page = Math.max(1, state.logs.page - 1); return renderLogs() }
   if (action === 'logs-next') { state.logs.page += 1; return renderLogs() }
-  if (action === 'reset-log-filters') { state.logs = { ...state.logs, page: 1, filters: {} }; return renderLogs() }
+  if (action === 'reset-log-filters') { state.logs = { ...state.logs, page: 1, filters: defaultLogFilters() }; return renderLogs() }
   if (action === 'refresh-providers') {
     state.providerSummary = null
     delete state.providerSeries[state.providerWindow]

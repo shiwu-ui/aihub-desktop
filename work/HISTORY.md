@@ -29,3 +29,7 @@
 [2026-07-28 03:27] 完成 11 个视图双窗口视觉回归，22 张截图全部生成且无页面级溢出 (tools/visual-qa-final.cjs)
 [2026-07-28 03:27] 使用进程级国内镜像构建 1.1.0 安装版与免安装版并清理旧 1.0.7 产物 (ELECTRON_MIRROR=npmmirror；electron-builder --win --publish never)
 [2026-07-28 03:27] 校验 1.1.0 PE/ASAR 版本、SHA-256 并完成打包程序启动烟雾测试 (校验两个 EXE、app.asar；packaged smoke 2/2 通过)
+[2026-07-28 08:13] 完善 1.1.0 更新日志、故障转移中文原因和所有初始 24 小时时间范围并补充回归测试 (更新 src/renderer/app.js、docs/release-notes/pending.md 与相关 tools/*-smoke.cjs)
+[2026-07-28 08:13] 完成 18 项注册测试和 22 张双窗口视觉回归，更新日志及故障转移关键截图无溢出 (逐项执行 package.json 中 test:*；tools/visual-qa-final.cjs)
+[2026-07-28 08:13] 使用进程级国内镜像和移动硬盘 Node 优先路径重新构建 1.1.0 安装版与免安装版，进程结束后恢复环境 (临时设置 ELECTRON_MIRROR、ELECTRON_BUILDER_BINARIES_MIRROR、PATH=<移动硬盘 Node 优先>；electron-builder --win --publish never)
+[2026-07-28 08:13] 校验 1.1.0 PE/ASAR、latest.yml、SHA-256 并完成打包态启动烟雾测试 (校验两个 EXE、app.asar；packaged smoke 2/2 通过)

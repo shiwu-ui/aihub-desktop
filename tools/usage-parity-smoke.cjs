@@ -79,6 +79,21 @@ async function run() {
     })
 
     await page.waitForSelector('#usage-analytics-filter')
+    const defaultRanges = await page.evaluate(() => ({
+      usageStart: state.usageAnalytics.startDate,
+      usageEnd: state.usageAnalytics.endDate,
+      usageGranularity: state.usageAnalytics.granularity,
+      logStart: state.logs.filters.start_date,
+      logEnd: state.logs.filters.end_date,
+      providerWindow: state.providerWindow,
+      usagePeriod: state.usagePeriod,
+    }))
+    assert.equal(new Date(`${defaultRanges.usageEnd}T00:00:00`).getTime() - new Date(`${defaultRanges.usageStart}T00:00:00`).getTime(), 24 * 60 * 60 * 1000)
+    assert.equal(defaultRanges.logStart, defaultRanges.usageStart)
+    assert.equal(defaultRanges.logEnd, defaultRanges.usageEnd)
+    assert.equal(defaultRanges.usageGranularity, 'hour')
+    assert.equal(defaultRanges.providerWindow, '24h')
+    assert.equal(defaultRanges.usagePeriod, '24h')
     assert.equal(await page.locator('#usage-analytics-filter [name="api_key_id"] option[value="7"]').count(), 1)
     assert.equal(await page.locator('#usage-analytics-filter [name="api_key_id"] option[value="9"]').count(), 1)
     assert.equal(await page.locator('#usage-analytics-filter [name="api_key_id"] option[value="99"]').count(), 0)
