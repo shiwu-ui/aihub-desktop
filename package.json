@@ -26,6 +26,7 @@
     "test:dashboard-redeem": "node tools/dashboard-redeem-smoke.cjs",
     "test:sidecar-rpc": "node tools/sidecar-rpc-smoke.cjs",
     "test:github-actions-build": "node tools/github-actions-build-contract-smoke.cjs",
+    "test:release-notes": "node tools/release-notes-smoke.cjs",
     "clean:old-builds": "node tools/clean-old-builds.cjs",
     "predist": "node tools/clean-old-builds.cjs",
     "pack": "electron-builder --dir --win",

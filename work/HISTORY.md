@@ -34,3 +34,4 @@
 [2026-07-28 08:13] 使用进程级国内镜像和移动硬盘 Node 优先路径重新构建 1.1.0 安装版与免安装版，进程结束后恢复环境 (临时设置 ELECTRON_MIRROR、ELECTRON_BUILDER_BINARIES_MIRROR、PATH=<移动硬盘 Node 优先>；electron-builder --win --publish never)
 [2026-07-28 08:13] 校验 1.1.0 PE/ASAR、latest.yml、SHA-256 并完成打包态启动烟雾测试 (校验两个 EXE、app.asar；packaged smoke 2/2 通过)
 [2026-07-28 19:22] 配置 GitHub Actions 三平台原生构建与 14 天 Artifacts，并补充跨平台 Electron Builder 目标和契约测试 (main push: Windows x64, Linux x64, macOS x64/arm64)
+[2026-07-28 19:36] 配置 v* 标签触发四平台构建并自动创建 GitHub Release，正文使用 pending.md 并追加产物与未签名提示 (GitHub Actions release job)
