@@ -2,7 +2,7 @@
   "name": "aihub-desktop",
   "version": "1.1.0",
   "private": true,
-  "description": "AIHub personal desktop dashboard for Windows",
+  "description": "AIHub cross-platform desktop dashboard",
   "author": "AIHub Desktop",
   "main": "src/main.cjs",
   "scripts": {
@@ -25,6 +25,7 @@
     "test:failover-log": "node tools/failover-log-smoke.cjs",
     "test:dashboard-redeem": "node tools/dashboard-redeem-smoke.cjs",
     "test:sidecar-rpc": "node tools/sidecar-rpc-smoke.cjs",
+    "test:github-actions-build": "node tools/github-actions-build-contract-smoke.cjs",
     "clean:old-builds": "node tools/clean-old-builds.cjs",
     "predist": "node tools/clean-old-builds.cjs",
     "pack": "electron-builder --dir --win",
@@ -65,6 +66,20 @@
         "nsis"
       ],
       "icon": "assets/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "artifactName": "AIHub-Desktop-${version}-linux-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "dmg": {
+      "artifactName": "AIHub-Desktop-${version}-mac-${arch}.${ext}"
     },
     "portable": {
       "artifactName": "AIHub-Desktop-${version}.${ext}"

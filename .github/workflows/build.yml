@@ -1,0 +1,83 @@
+name: Build desktop apps
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --win --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aihub-desktop-windows-x64
+          path: |
+            dist/AIHub-Desktop-*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --linux AppImage --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aihub-desktop-linux-x64
+          path: dist/AIHub-Desktop-*-linux-x64.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-x64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --mac dmg --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aihub-desktop-macos-x64
+          path: dist/AIHub-Desktop-*-mac-x64.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --mac dmg --arm64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aihub-desktop-macos-arm64
+          path: dist/AIHub-Desktop-*-mac-arm64.dmg
+          if-no-files-found: error
+          retention-days: 14
