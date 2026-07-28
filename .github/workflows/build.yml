@@ -44,7 +44,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: aihub-desktop-linux-x64
-          path: dist/AIHub-Desktop-*-linux-x64.AppImage
+          path: dist/*.AppImage
           if-no-files-found: error
           retention-days: 14
 

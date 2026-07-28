@@ -25,6 +25,7 @@ for (const required of [
   'npm ci',
   '--win --x64 --publish never',
   '--linux AppImage --x64 --publish never',
+  'path: dist/*.AppImage',
   '--mac dmg --x64 --publish never',
   '--mac dmg --arm64 --publish never',
   'if-no-files-found: error',
